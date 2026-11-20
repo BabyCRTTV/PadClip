@@ -34,7 +34,8 @@ $exe=(Resolve-Path ./dist/PadClip.exe).Path
 $app=Start-Process $exe -ArgumentList '--startup' -PassThru
 $link=Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'PadClip.lnk'
 try {
- for($n=0;$n -lt 80;$n++){ $w=[PadClipShell]::FindWindow('8BitTradePadClip',$null); if($w -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100 }
+ for($n=0;$n -lt 80;$n++){ $w=[PadClipShell]::FindWindow('8BitTradePadClip','PadClip  |  8BitTrade'); if($w -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100 }
+ if($w -eq [IntPtr]::Zero){throw "Could not locate PadClip window (exited=$($app.HasExited))"}
  CheckIcon 'Window large' ([PadClipShell]::ClassIcon($w,-14))
  CheckIcon 'Window small / tray artwork' ([PadClipShell]::ClassIcon($w,-34))
  $sh=New-Object -ComObject WScript.Shell
