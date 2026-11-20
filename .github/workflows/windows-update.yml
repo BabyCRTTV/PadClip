@@ -1,0 +1,18 @@
+name: Windows update check
+on:
+  push:
+    paths:
+      - '8BitTrade-PadClip-Windows.zip'
+      - 'update.json'
+      - 'tests/windows_update.py'
+      - '.github/workflows/windows-update.yml'
+permissions:
+  contents: read
+jobs:
+  update:
+    runs-on: windows-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise packaged updater and relaunch
+        run: python tests/windows_update.py

@@ -34,4 +34,11 @@ using your chosen minimize behavior. Startup is off by default. Extract
 the app to its permanent folder before enabling startup. If you move it,
 turn the setting off and back on to update the executable path.
 
+Updates
+Choose "Check for updates?" in Settings while PadClip is idle. If a newer
+version is available, choose Yes to install and restart, or No to keep
+using your copy. PadClip shows the changelog after it reopens. Older copies
+without the button need the ZIP above once. Keep the extracted app in a
+folder you can write to.
+
 Only recording opens the display capture device, audio stream and encoder.
