@@ -22,13 +22,15 @@ Audio comes from the default playback device. If that device cannot be
 opened, the start banner says "video only". Game Bar is no longer required.
 If an exclusive-fullscreen game produces a black clip or hides the banner,
 try borderless windowed mode. For a failed start, the window shows the stage
-and Windows error code. Closing PadClip during recording finishes the clip.
+and Windows error code. Exiting PadClip during recording finishes the clip.
 
 Settings
 Leave "Minimize to system tray" unchecked for normal taskbar behavior.
 When checked, minimizing hides the window beside the clock. Click the
 PadClip tray icon to restore, or right-click for Open and Exit. Windows
-may put the icon in the hidden-icons menu. Closing the window exits.
+may put the icon in the hidden-icons menu. By default, closing the window exits. Enable "Close to system tray" to
+keep PadClip and any active recording running when you click X. This setting
+is independent of "Minimize to system tray".
 Enable "Start minimized when I sign in to Windows" to launch the listener
 using your chosen minimize behavior. Startup is off by default. Extract
 the app to its permanent folder before enabling startup. If you move it,

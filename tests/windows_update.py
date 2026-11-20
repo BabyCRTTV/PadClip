@@ -17,6 +17,8 @@ for name, args, result in (
     ("FindWindowW", [wintypes.LPCWSTR, wintypes.LPCWSTR], wintypes.HWND),
     ("GetDlgItem", [wintypes.HWND, ctypes.c_int], wintypes.HWND),
     ("PostMessageW", [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM], wintypes.BOOL),
+    ("SendMessageW", [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM], ctypes.c_ssize_t),
+    ("IsIconic", [wintypes.HWND], wintypes.BOOL),
     ("IsWindowVisible", [wintypes.HWND], wintypes.BOOL),
     ("IsWindow", [wintypes.HWND], wintypes.BOOL),
     ("GetDlgCtrlID", [wintypes.HWND], ctypes.c_int),
@@ -72,6 +74,24 @@ def check():
     button = UI.GetDlgItem(window, 6)
     wait(lambda: UI.IsWindowEnabled(button), "idle update button")
     assert UI.PostMessageW(window, 0x111, 6, button)
+
+
+def exercise_close_to_tray():
+    window = UI.FindWindowW("8BitTradePadClip", None)
+    close_box = UI.GetDlgItem(window, 7)
+    minimize_box = UI.GetDlgItem(window, 4)
+    assert close_box and UI.SendMessageW(close_box, 0xF0, 0, 0) == 0
+    UI.SendMessageW(close_box, 0xF5, 0, 0)
+    assert UI.SendMessageW(close_box, 0xF0, 0, 0) == 1
+    assert UI.SendMessageW(minimize_box, 0xF0, 0, 0) == 0
+    # SC_MINIMIZE still uses the taskbar. SC_CLOSE follows the title-bar X path.
+    UI.PostMessageW(window, 0x112, 0xF020, 0)
+    wait(lambda: UI.IsIconic(window) and UI.IsWindowVisible(window), "taskbar minimize")
+    UI.SendMessageW(window, 0x112, 0xF120, 0)
+    UI.PostMessageW(window, 0x112, 0xF060, 0)
+    wait(lambda: UI.IsWindow(window) and not UI.IsWindowVisible(window), "close to tray")
+    UI.PostMessageW(window, 0x8003, 1, 0x202)  # Tray icon left-click callback.
+    wait(lambda: UI.IsWindowVisible(window) and not UI.IsIconic(window), "tray restore")
 
 
 def replace_once(data, old, new):
@@ -135,6 +155,7 @@ def main():
                 dismiss("PadClip updates", "Install the update", 6)
                 dismiss("PadClip updates", "did not match")
                 assert old.poll() is None and app.read_bytes() == fixture
+                exercise_close_to_tray()
                 state.update(feed)
                 check()
                 dismiss("PadClip updates", "Install the update", 6)
@@ -142,10 +163,31 @@ def main():
                 dismiss("What's new in PadClip " + version, notes.splitlines()[0])
                 assert app.read_bytes() == shipped
                 wait(lambda: not list(app.parent.glob(".padclip-*")), "update cleanup")
+                window = UI.FindWindowW("8BitTradePadClip", None)
+                close_box = UI.GetDlgItem(window, 7)
+                assert UI.SendMessageW(close_box, 0xF0, 0, 0) == 1
+                UI.SendMessageW(window, 0x10, 0, 0)
+                assert UI.IsWindow(window) and not UI.IsWindowVisible(window)
+                UI.PostMessageW(window, 0x111, 101, 0)  # Tray menu's Exit command.
+                wait(lambda: not UI.IsWindow(window), "explicit tray exit")
+                # A normal launch remembers the preference. Disabling it restores exit on X.
+                reopened = subprocess.Popen([app])
+                try:
+                    window = wait(lambda: UI.FindWindowW("8BitTradePadClip", None), "relaunch")
+                    close_box = wait(lambda: UI.GetDlgItem(window, 7), "close checkbox")
+                    wait(lambda: UI.IsWindowVisible(window), "visible window")
+                    assert UI.SendMessageW(close_box, 0xF0, 0, 0) == 1
+                    UI.SendMessageW(close_box, 0xF5, 0, 0)
+                    UI.PostMessageW(window, 0x112, 0xF060, 0)
+                    reopened.wait(timeout=10)
+                finally:
+                    if reopened.poll() is None:
+                        reopened.kill()
+                        reopened.wait()
             finally:
                 window = UI.FindWindowW("8BitTradePadClip", None)
                 if window:
-                    UI.PostMessageW(window, 0x10, 0, 0)
+                    UI.PostMessageW(window, 0x111, 101, 0)
                 old.wait(timeout=10)
                 wait(lambda: not UI.FindWindowW("8BitTradePadClip", None), "PadClip exit")
     finally:

@@ -38,9 +38,10 @@ static DWORD shortcut =
 static BOOL learning, armed, latched[4];
 static int owner = -1;
 static const wchar_t config[] = L"Software\\8BitTrade\\PadClip";
-static BOOL trayMode, inTray;
+static BOOL trayMode, closeToTray, inTray;
+enum { TRAY_OPEN = 100, TRAY_EXIT };
 static UINT explorerRestart;
-static HWND trayBox, startupBox;
+static HWND trayBox, closeTrayBox, startupBox;
 static const wchar_t runKey[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 static BOOL trayIcon(DWORD action) {
@@ -62,12 +63,28 @@ static void restore(void) {
   ShowWindow(mainwin, SW_RESTORE);
   SetForegroundWindow(mainwin);
 }
-static void minimize(void) {
-  if (trayMode && trayIcon(NIM_ADD)) {
+static void minimize(BOOL useTray) {
+  if (useTray && (inTray || trayIcon(NIM_ADD))) {
     inTray = TRUE;
     ShowWindow(mainwin, SW_HIDE);
   } else
     ShowWindow(mainwin, SW_MINIMIZE);
+}
+static BOOL readTrayPreference(const wchar_t *name) {
+  DWORD value = 0, size = sizeof(value);
+  return RegGetValueW(HKEY_CURRENT_USER, config, name, RRF_RT_REG_DWORD, NULL,
+                      &value, &size) == ERROR_SUCCESS && value != 0;
+}
+static void saveTrayPreference(HWND box, const wchar_t *name, BOOL *setting) {
+  DWORD value = SendMessageW(box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  if (RegSetKeyValueW(HKEY_CURRENT_USER, config, name, REG_DWORD, &value,
+                      sizeof(value)) == ERROR_SUCCESS) {
+    *setting = value;
+  } else {
+    SendMessageW(box, BM_SETCHECK, *setting, 0);
+    MessageBoxW(mainwin, L"Could not save the system tray preference.", L"PadClip",
+                MB_ICONWARNING);
+  }
 }
 static BOOL startupEnabled(void) {
   DWORD size = 0;
@@ -267,6 +284,16 @@ static HWND child(const wchar_t *type, const wchar_t *text, int x, int y, int w,
   SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
   return c;
 }
+static void exitPadClip(void) {
+  if (worker) {
+    closing = TRUE;
+    stopping = TRUE;
+    SetEvent(stopEvent);
+    show(details, L"Saving before exit...");
+  } else {
+    DestroyWindow(mainwin);
+  }
+}
 static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
   if (explorerRestart && msg == explorerRestart && inTray) {
     if (!trayIcon(NIM_ADD))
@@ -276,7 +303,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
   switch (msg) {
   case WM_SYSCOMMAND:
     if ((w & 0xfff0) == SC_MINIMIZE && trayMode) {
-      minimize();
+      minimize(trayMode);
       return 0;
     }
     break;
@@ -290,16 +317,11 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       POINT point;
       GetCursorPos(&point);
       HMENU menu = CreatePopupMenu();
-      AppendMenuW(menu, MF_STRING, 1, L"Open PadClip");
-      AppendMenuW(menu, MF_STRING, 2, L"Exit");
+      AppendMenuW(menu, MF_STRING, TRAY_OPEN, L"Open PadClip");
+      AppendMenuW(menu, MF_STRING, TRAY_EXIT, L"Exit");
       SetForegroundWindow(h);
-      int id = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x,
-                              point.y, 0, h, NULL);
+      TrackPopupMenu(menu, TPM_RIGHTBUTTON, point.x, point.y, 0, h, NULL);
       DestroyMenu(menu);
-      if (id == 1)
-        restore();
-      if (id == 2)
-        PostMessageW(h, WM_CLOSE, 0, 0);
     }
     return 0;
   case WM_COMMAND:
@@ -318,20 +340,20 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       }
       break;
     case 2:
-      minimize();
+      minimize(trayMode);
       break;
-    case 4: {
-      DWORD value = SendMessageW(trayBox, BM_GETCHECK, 0, 0) == BST_CHECKED;
-      if (RegSetKeyValueW(HKEY_CURRENT_USER, config, L"Tray", REG_DWORD, &value,
-                          sizeof(value)) == ERROR_SUCCESS)
-        trayMode = value;
-      else {
-        SendMessageW(trayBox, BM_SETCHECK, trayMode, 0);
-        MessageBoxW(h, L"Could not save minimize preference.", L"PadClip",
-                    MB_ICONWARNING);
-      }
+    case TRAY_OPEN:
+      restore();
       break;
-    }
+    case TRAY_EXIT:
+      exitPadClip();
+      break;
+    case 4:
+      saveTrayPreference(trayBox, L"Tray", &trayMode);
+      break;
+    case 7:
+      saveTrayPreference(closeTrayBox, L"CloseToTray", &closeToTray);
+      break;
     case 5:
       if (!setStartup(SendMessageW(startupBox, BM_GETCHECK, 0, 0) ==
                       BST_CHECKED)) {
@@ -384,13 +406,10 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   }
   case WM_CLOSE:
-    if (worker) {
-      closing = TRUE;
-      stopping = TRUE;
-      SetEvent(stopEvent);
-      show(details, L"Saving before exit...");
-    } else
-      DestroyWindow(h);
+    if (closeToTray && !closing)
+      minimize(TRUE);
+    else
+      exitPadClip();
     return 0;
   case WM_TIMER:
     if (w == 1)
@@ -448,10 +467,8 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
                    NULL, &v, &size) == ERROR_SUCCESS &&
       v && !(v & ~0x03fff3ffu))
     shortcut = v;
-  size = sizeof(v);
-  if (RegGetValueW(HKEY_CURRENT_USER, config, L"Tray", RRF_RT_REG_DWORD, NULL,
-                   &v, &size) == ERROR_SUCCESS)
-    trayMode = v != 0;
+  trayMode = readTrayPreference(L"Tray");
+  closeToTray = readTrayPreference(L"CloseToTray");
   explorerRestart = RegisterWindowMessageW(L"TaskbarCreated");
   WNDCLASSW wc = {0};
   wc.lpszClassName = L"8BitTradePadClip";
@@ -465,7 +482,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   mainwin =
       CreateWindowW(wc.lpszClassName, L"PadClip  |  8BitTrade",
                     WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT,
-                    CW_USEDEFAULT, 560, 430, NULL, NULL, app, NULL);
+                    CW_USEDEFAULT, 560, 461, NULL, NULL, app, NULL);
   if (!mainwin)
     return 1;
   binding = child(L"STATIC", L"", 18, 22, 510, 38, 0);
@@ -476,10 +493,13 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   details = child(L"STATIC", L"Ready to record.", 18, 174, 510, 58, 0);
   child(L"STATIC", L"Settings", 18, 235, 510, 22, 0);
   trayBox = child(L"BUTTON", L"Minimize to system tray", 18, 261, 460, 27, 4);
+  closeTrayBox = child(L"BUTTON", L"Close to system tray", 18, 292, 460, 27, 7);
   startupBox = child(L"BUTTON", L"Start minimized when I sign in to Windows",
-                     18, 292, 480, 28, 5);
-  updateButton = child(L"BUTTON", L"Check for updates?", 18, 332, 178, 32, 6);
+                     18, 323, 480, 28, 5);
+  updateButton = child(L"BUTTON", L"Check for updates?", 18, 363, 178, 32, 6);
   SendMessageW(trayBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
+  SendMessageW(closeTrayBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
+  SendMessageW(closeTrayBox, BM_SETCHECK, closeToTray, 0);
   SendMessageW(startupBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
   SendMessageW(trayBox, BM_SETCHECK, trayMode, 0);
   SendMessageW(startupBox, BM_SETCHECK, startupEnabled(), 0);
@@ -491,7 +511,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   finish();
   poll();
   if (lstrcmpW(cmd, L"--startup") == 0)
-    minimize();
+    minimize(trayMode);
   else {
     ShowWindow(mainwin, mode);
     showReleaseNotes(mainwin, lstrcmpW(cmd, L"--updated") == 0);
