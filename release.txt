@@ -1,4 +1,2 @@
-1.2.0
-Enable "Close to system tray" in Settings to keep PadClip and any active recording running when you click X. Click the tray icon to reopen PadClip, or right-click it and choose Exit to quit.
-
-The close and minimize settings are independent. Close to system tray is off by default.
+1.2.1
+PadClip now has its own controller icon with a red recording dot. Look for it on the app window, taskbar, system tray, and desktop shortcuts.

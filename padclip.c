@@ -41,6 +41,7 @@ static const wchar_t config[] = L"Software\\8BitTrade\\PadClip";
 static BOOL trayMode, closeToTray, inTray;
 enum { TRAY_OPEN = 100, TRAY_EXIT };
 static UINT explorerRestart;
+static HICON smallAppIcon;
 static HWND trayBox, closeTrayBox, startupBox;
 static const wchar_t runKey[] =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -51,7 +52,7 @@ static BOOL trayIcon(DWORD action) {
   icon.uID = 1;
   icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   icon.uCallbackMessage = WM_APP + 3;
-  icon.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+  icon.hIcon = smallAppIcon;
   StringCchCopyW(icon.szTip, 128, L"PadClip");
   return Shell_NotifyIconW(action, &icon);
 }
@@ -470,14 +471,20 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   trayMode = readTrayPreference(L"Tray");
   closeToTray = readTrayPreference(L"CloseToTray");
   explorerRestart = RegisterWindowMessageW(L"TaskbarCreated");
-  WNDCLASSW wc = {0};
+  WNDCLASSEXW wc = {0};
+  wc.cbSize = sizeof(wc);
   wc.lpszClassName = L"8BitTradePadClip";
   wc.hInstance = app;
   wc.lpfnWndProc = handler;
   wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
   wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
-  wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
-  if (!RegisterClassW(&wc))
+  LPCWSTR iconId = MAKEINTRESOURCEW(1);
+  wc.hIcon = LoadImageW(app, iconId, IMAGE_ICON, GetSystemMetrics(SM_CXICON),
+                        GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
+  smallAppIcon = LoadImageW(app, iconId, IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                            GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+  wc.hIconSm = smallAppIcon;
+  if (!RegisterClassExW(&wc))
     return 1;
   mainwin =
       CreateWindowW(wc.lpszClassName, L"PadClip  |  8BitTrade",
@@ -521,6 +528,9 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
+  UnregisterClassW(wc.lpszClassName, app);
+  DestroyIcon(smallAppIcon);
+  DestroyIcon(wc.hIcon);
   CloseHandle(mutex);
   return 0;
 }
