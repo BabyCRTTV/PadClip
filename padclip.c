@@ -3,8 +3,9 @@
 #include <strsafe.h>
 #include <windows.h>
 #include <xinput.h>
+#include "updates.h"
 
-static HWND mainwin, binding, status, change;
+static HWND mainwin, binding, status, change, updateButton;
 static const wchar_t *buttons[] = {L"D-pad Up",
                                    L"D-pad Down",
                                    L"D-pad Left",
@@ -120,6 +121,7 @@ static DWORD inputs(XINPUT_GAMEPAD p) {
 }
 static void finish(void) {
   learning = FALSE;
+  EnableWindow(updateButton, TRUE);
   owner = -1;
   candidate = 0;
   show(change, L"Change shortcut");
@@ -128,7 +130,8 @@ static void finish(void) {
 extern HRESULT captureClip(HWND, HANDLE, wchar_t *, size_t, const wchar_t **);
 static HWND notice, details, recordButton;
 static HANDLE stopEvent, worker;
-static BOOL closing, stopping;
+static BOOL closing, stopping, updating;
+
 static wchar_t path[MAX_PATH];
 static const wchar_t *stage;
 static int activePad = -1;
@@ -153,6 +156,8 @@ static DWORD WINAPI runCapture(void *unused) {
   return 0;
 }
 static void toggle(void) {
+  if (updating || closing)
+    return;
   if (worker) {
     if (!stopping) {
       stopping = TRUE;
@@ -173,6 +178,7 @@ static void toggle(void) {
     return;
   }
   stopping = FALSE;
+  EnableWindow(updateButton, FALSE);
   show(details, L"Starting recorder...");
   show(recordButton, L"Stop and save");
   EnableWindow(change, FALSE);
@@ -303,6 +309,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
         finish();
       else {
         learning = TRUE;
+        EnableWindow(updateButton, FALSE);
         armed = FALSE;
         candidate = 0;
         owner = -1;
@@ -333,6 +340,16 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
                     MB_ICONWARNING);
       }
       break;
+    case 6:
+      if (!worker && !updating && !closing && !learning && beginUpdate(h)) {
+        updating = TRUE;
+        EnableWindow(updateButton, FALSE);
+        EnableWindow(recordButton, FALSE);
+        EnableWindow(change, FALSE);
+        show(updateButton, L"Checking for updates...");
+        SetTimer(h, 4, 150, NULL);
+      }
+      break;
     case 3:
       if (!learning)
         toggle();
@@ -348,6 +365,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     CloseHandle(worker);
     CloseHandle(stopEvent);
     worker = NULL;
+    EnableWindow(updateButton, TRUE);
     stopEvent = NULL;
     stopping = FALSE;
     EnableWindow(change, TRUE);
@@ -380,6 +398,23 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     else if (w == 2) {
       KillTimer(h, 2);
       ShowWindow(notice, SW_HIDE);
+    } else if (w == 4 && updating) {
+      DWORD code;
+      if (updateReady()) {
+        KillTimer(h, 4);
+        DestroyWindow(h);
+      } else if (updateFinished(&code)) {
+        KillTimer(h, 4);
+        closeUpdateHandles();
+        updating = FALSE;
+        show(updateButton, L"Check for updates?");
+        EnableWindow(updateButton, TRUE);
+        EnableWindow(recordButton, TRUE);
+        EnableWindow(change, TRUE);
+        if (code)
+          MessageBoxW(h, L"The update checker could not run. Please try again.",
+                      L"PadClip updates", MB_ICONWARNING);
+      }
     } else if (w == 3) {
       KillTimer(h, 3);
       XINPUT_VIBRATION v = {0};
@@ -390,6 +425,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
   case WM_DESTROY:
     if (inTray)
       trayIcon(NIM_DELETE);
+    closeUpdateHandles();
     PostQuitMessage(0);
     return 0;
   }
@@ -429,7 +465,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   mainwin =
       CreateWindowW(wc.lpszClassName, L"PadClip  |  8BitTrade",
                     WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT,
-                    CW_USEDEFAULT, 560, 390, NULL, NULL, app, NULL);
+                    CW_USEDEFAULT, 560, 430, NULL, NULL, app, NULL);
   if (!mainwin)
     return 1;
   binding = child(L"STATIC", L"", 18, 22, 510, 38, 0);
@@ -442,6 +478,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   trayBox = child(L"BUTTON", L"Minimize to system tray", 18, 261, 460, 27, 4);
   startupBox = child(L"BUTTON", L"Start minimized when I sign in to Windows",
                      18, 292, 480, 28, 5);
+  updateButton = child(L"BUTTON", L"Check for updates?", 18, 332, 178, 32, 6);
   SendMessageW(trayBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
   SendMessageW(startupBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
   SendMessageW(trayBox, BM_SETCHECK, trayMode, 0);
@@ -455,8 +492,10 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   poll();
   if (lstrcmpW(cmd, L"--startup") == 0)
     minimize();
-  else
+  else {
     ShowWindow(mainwin, mode);
+    showReleaseNotes(mainwin, lstrcmpW(cmd, L"--updated") == 0);
+  }
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
     TranslateMessage(&msg);

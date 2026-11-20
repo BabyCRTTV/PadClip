@@ -1,0 +1,4 @@
+1.1.0
+Check for updates from Settings. You can install a new version immediately or keep using your current version.
+
+After an update, PadClip reopens and shows what changed. Your recording shortcut, startup settings and clips stay in place.
