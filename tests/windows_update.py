@@ -19,7 +19,7 @@ for name, args, result in (
     ("PostMessageW", [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM], wintypes.BOOL),
     ("IsWindowVisible", [wintypes.HWND], wintypes.BOOL),
     ("IsWindow", [wintypes.HWND], wintypes.BOOL),
-    ("IsHungAppWindow", [wintypes.HWND], wintypes.BOOL),
+    ("GetDlgCtrlID", [wintypes.HWND], ctypes.c_int),
     ("SetForegroundWindow", [wintypes.HWND], wintypes.BOOL),
     ("IsWindowEnabled", [wintypes.HWND], wintypes.BOOL),
     ("FindWindowExW", [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR], wintypes.HWND),
@@ -48,20 +48,20 @@ def dismiss(title, text, button=1):
         UI.GetWindowTextW(child, buf, len(buf))
         labels.append(buf.value)
     assert any(text in label for label in labels), (title, labels)
-    control = wait(lambda: UI.GetDlgItem(dialog, button), f"dialog button {button}")
+    # An OK-only Windows message box can assign IDCANCEL to its sole button.
+    control = wait(lambda: (UI.FindWindowExW(dialog, None, "Button", None) if button == 1
+                            else UI.GetDlgItem(dialog, button)), f"dialog button {button}")
+    command = UI.GetDlgCtrlID(control)
     wait(lambda: UI.IsWindowVisible(dialog) and UI.IsWindowEnabled(control), "enabled confirmation")
-    print("Dialog:", title, labels, "response", button, flush=True)
-    # A message box can create its child controls before its modal loop starts.
+    print("Dialog:", title, labels, "response", command, flush=True)
     def respond():
         if not UI.IsWindow(dialog):
             return True
         UI.SetForegroundWindow(dialog)
-        assert UI.PostMessageW(dialog, 0x111, button, control)
-        if button == 1:
-            UI.PostMessageW(dialog, 0x10, 0, 0)
+        assert UI.PostMessageW(dialog, 0x111, command, control)
         time.sleep(0.25)
         return not UI.IsWindow(dialog)
-    wait(respond, f"dialog dismissal (hung={UI.IsHungAppWindow(dialog)})")
+    wait(respond, "dialog dismissal")
 
 
 def check():
