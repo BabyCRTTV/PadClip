@@ -43,13 +43,16 @@ def wait(operation, description):
 
 def dismiss(title, text, button=1):
     dialog = wait(lambda: UI.FindWindowW("#32770", title), title)
-    child = None
-    labels = []
-    while child := UI.FindWindowExW(dialog, child, "Static", None):
-        buf = ctypes.create_unicode_buffer(4096)
-        UI.GetWindowTextW(child, buf, len(buf))
-        labels.append(buf.value)
-    assert any(text in label for label in labels), (title, labels)
+    def message_labels():
+        labels = []
+        child = None
+        while child := UI.FindWindowExW(dialog, child, "Static", None):
+            buf = ctypes.create_unicode_buffer(4096)
+            UI.GetWindowTextW(child, buf, len(buf))
+            labels.append(buf.value)
+        return labels if any(text in label for label in labels) else None
+
+    labels = wait(message_labels, f"{title} message text")
     # An OK-only Windows message box can assign IDCANCEL to its sole button.
     control = wait(lambda: (UI.FindWindowExW(dialog, None, "Button", None) if button == 1
                             else UI.GetDlgItem(dialog, button)), f"dialog button {button}")
