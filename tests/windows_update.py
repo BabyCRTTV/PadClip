@@ -17,6 +17,10 @@ for name, args, result in (
     ("FindWindowW", [wintypes.LPCWSTR, wintypes.LPCWSTR], wintypes.HWND),
     ("GetDlgItem", [wintypes.HWND, ctypes.c_int], wintypes.HWND),
     ("PostMessageW", [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM], wintypes.BOOL),
+    ("IsWindowVisible", [wintypes.HWND], wintypes.BOOL),
+    ("IsWindow", [wintypes.HWND], wintypes.BOOL),
+    ("IsHungAppWindow", [wintypes.HWND], wintypes.BOOL),
+    ("SetForegroundWindow", [wintypes.HWND], wintypes.BOOL),
     ("IsWindowEnabled", [wintypes.HWND], wintypes.BOOL),
     ("FindWindowExW", [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR], wintypes.HWND),
     ("GetWindowTextW", [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
@@ -44,8 +48,20 @@ def dismiss(title, text, button=1):
         UI.GetWindowTextW(child, buf, len(buf))
         labels.append(buf.value)
     assert any(text in label for label in labels), (title, labels)
-    assert UI.PostMessageW(dialog, 0x111, button, UI.GetDlgItem(dialog, button) or 0)
-    wait(lambda: UI.FindWindowW("#32770", title) != dialog, "dialog dismissal")
+    control = wait(lambda: UI.GetDlgItem(dialog, button), f"dialog button {button}")
+    wait(lambda: UI.IsWindowVisible(dialog) and UI.IsWindowEnabled(control), "enabled confirmation")
+    print("Dialog:", title, labels, "response", button, flush=True)
+    # A message box can create its child controls before its modal loop starts.
+    def respond():
+        if not UI.IsWindow(dialog):
+            return True
+        UI.SetForegroundWindow(dialog)
+        assert UI.PostMessageW(dialog, 0x111, button, control)
+        if button == 1:
+            UI.PostMessageW(dialog, 0x10, 0, 0)
+        time.sleep(0.25)
+        return not UI.IsWindow(dialog)
+    wait(respond, f"dialog dismissal (hung={UI.IsHungAppWindow(dialog)})")
 
 
 def check():

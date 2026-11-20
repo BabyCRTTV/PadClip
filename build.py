@@ -36,7 +36,7 @@ def build():
         subprocess.run([cxx, *objects, res, "-municode", "-mwindows", "-static", "-s",
                         "-Wl,--no-insert-timestamp", "-lcrypt32", "-ld3d11", "-ldxgi",
                         "-lmfreadwrite", "-lmfplat", "-lmfuuid", "-lole32", "-luuid",
-                        "-lgdi32", "-lshell32", "-lshlwapi", "-ladvapi32", "-lxinput9_1_0",
+                        "-lgdi32", "-lshell32", "-lshlwapi", "-ladvapi32", "-lxinput1_4",
                         "-o", exe], check=True)
         with ZipFile(PACKAGE, "w", ZIP_DEFLATED) as package:
             package.write(exe, "PadClip.exe")

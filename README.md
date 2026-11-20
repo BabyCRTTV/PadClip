@@ -42,3 +42,9 @@ without the button need the ZIP above once. Keep the extracted app in a
 folder you can write to.
 
 Only recording opens the display capture device, audio stream and encoder.
+
+### Building an update
+
+Put the new version number and its changelog in `release.txt`. Run
+`python3 build.py` with the x64 MinGW-w64 tools on PATH. Publish the generated
+ZIP and `update.json` together on `main` so installed copies can verify the download.
