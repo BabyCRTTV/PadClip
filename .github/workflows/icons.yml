@@ -1,0 +1,12 @@
+name: Windows controller icon verification
+on: [push]
+permissions:
+  contents: read
+jobs:
+  icons:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - shell: powershell
+        run: ./verify-icons.ps1
