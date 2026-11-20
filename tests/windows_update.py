@@ -44,7 +44,7 @@ def dismiss(title, text, button=1):
         UI.GetWindowTextW(child, buf, len(buf))
         labels.append(buf.value)
     assert any(text in label for label in labels), (title, labels)
-    assert UI.PostMessageW(UI.GetDlgItem(dialog, button), 0xF5, 0, 0)
+    assert UI.PostMessageW(dialog, 0x111, button, UI.GetDlgItem(dialog, button) or 0)
     wait(lambda: UI.FindWindowW("#32770", title) != dialog, "dialog dismissal")
 
 
@@ -52,7 +52,7 @@ def check():
     window = wait(lambda: UI.FindWindowW("8BitTradePadClip", None), "PadClip window")
     button = UI.GetDlgItem(window, 6)
     wait(lambda: UI.IsWindowEnabled(button), "idle update button")
-    assert UI.PostMessageW(button, 0xF5, 0, 0)
+    assert UI.PostMessageW(window, 0x111, 6, button)
 
 
 def replace_once(data, old, new):

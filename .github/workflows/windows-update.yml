@@ -13,6 +13,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 6
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Exercise packaged updater and relaunch
         run: python tests/windows_update.py
