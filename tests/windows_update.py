@@ -58,7 +58,10 @@ def dismiss(title, text, button=1):
         if not UI.IsWindow(dialog):
             return True
         UI.SetForegroundWindow(dialog)
-        assert UI.PostMessageW(dialog, 0x111, command, control)
+        if button == 1:
+            assert UI.PostMessageW(dialog, 0x10, 0, 0)
+        else:
+            assert UI.PostMessageW(dialog, 0x111, UI.GetDlgCtrlID(control), control)
         time.sleep(0.25)
         return not UI.IsWindow(dialog)
     wait(respond, "dialog dismissal")
