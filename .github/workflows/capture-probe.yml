@@ -1,0 +1,18 @@
+name: Verify released capture on Windows
+on: [push]
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - run: Get-CimInstance Win32_VideoController | Format-Table Name, CurrentRefreshRate, CurrentHorizontalResolution, CurrentVerticalResolution
+      - run: python capture_probe.py
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('capture-sample.mp4') != ''
+        with:
+          name: synthetic-capture
+          path: capture-sample.mp4
+          retention-days: 1
