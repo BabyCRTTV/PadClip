@@ -39,6 +39,7 @@ static BOOL learning, armed, latched[4];
 static int owner = -1;
 static const wchar_t config[] = L"Software\\8BitTrade\\PadClip";
 static BOOL trayMode, closeToTray, inTray;
+static int startupTrayRetries;
 enum { TRAY_OPEN = 100, TRAY_EXIT };
 static UINT explorerRestart;
 static HICON smallAppIcon;
@@ -57,6 +58,8 @@ static BOOL trayIcon(DWORD action) {
   return Shell_NotifyIconW(action, &icon);
 }
 static void restore(void) {
+  startupTrayRetries = 0;
+  KillTimer(mainwin, 5);
   if (inTray) {
     trayIcon(NIM_DELETE);
     inTray = FALSE;
@@ -87,24 +90,84 @@ static void saveTrayPreference(HWND box, const wchar_t *name, BOOL *setting) {
                 MB_ICONWARNING);
   }
 }
-static BOOL startupEnabled(void) {
-  DWORD size = 0;
-  return RegGetValueW(HKEY_CURRENT_USER, runKey, L"PadClip", RRF_RT_REG_SZ,
-                      NULL, NULL, &size) == ERROR_SUCCESS;
+static const wchar_t approvalKey[] =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+
+static BOOL startupBlocked(void) {
+  BYTE data[32];
+  DWORD size = sizeof(data);
+  return RegGetValueW(HKEY_CURRENT_USER, approvalKey, L"PadClip", RRF_RT_REG_BINARY,
+                      NULL, data, &size) == ERROR_SUCCESS && size &&
+         (data[0] == 3 || data[0] == 7);
 }
-static BOOL setStartup(BOOL enabled) {
-  if (!enabled) {
-    LSTATUS result = RegDeleteKeyValueW(HKEY_CURRENT_USER, runKey, L"PadClip");
-    return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND;
+
+static LSTATUS startupCommand(wchar_t command[MAX_PATH]) {
+  wchar_t exe[MAX_PATH];
+  DWORD len = GetModuleFileNameW(NULL, exe, MAX_PATH);
+  if (!len)
+    return GetLastError();
+  if (len >= MAX_PATH ||
+      FAILED(StringCchPrintfW(command, MAX_PATH, L"\"%ls\" --startup", exe)))
+    return ERROR_FILENAME_EXCED_RANGE;
+  return ERROR_SUCCESS;
+}
+
+static LSTATUS setStartup(BOOL enable) {
+  if (!enable) {
+    LSTATUS err = RegDeleteKeyValueW(HKEY_CURRENT_USER, runKey, L"PadClip");
+    return err == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : err;
   }
-  wchar_t exe[MAX_PATH], cmd[MAX_PATH + 20];
-  DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
-  if (!n || n >= MAX_PATH ||
-      FAILED(StringCchPrintfW(cmd, MAX_PATH + 20, L"\"%ls\" --startup", exe)))
-    return FALSE;
-  return RegSetKeyValueW(HKEY_CURRENT_USER, runKey, L"PadClip", REG_SZ, cmd,
-                         (lstrlenW(cmd) + 1) * sizeof(wchar_t)) ==
-         ERROR_SUCCESS;
+  wchar_t command[MAX_PATH];
+  LSTATUS err = startupCommand(command);
+  if (err != ERROR_SUCCESS)
+    return err;
+  return RegSetKeyValueW(HKEY_CURRENT_USER, runKey, L"PadClip", REG_SZ, command,
+                         (lstrlenW(command) + 1) * sizeof(*command));
+}
+
+// An existing registration is the user's opt-in, including in older versions.
+// Do not recreate a registration the user removed or change Windows' approval.
+static void refreshStartup(BOOL repair) {
+  if (!startupBox)
+    return;
+  wchar_t actual[MAX_PATH], wanted[MAX_PATH];
+  DWORD size = sizeof(actual);
+  LSTATUS err = RegGetValueW(HKEY_CURRENT_USER, runKey, L"PadClip", RRF_RT_REG_SZ,
+                             NULL, actual, &size);
+  BOOL registered = err == ERROR_SUCCESS || err == ERROR_MORE_DATA;
+  BOOL valid = err == ERROR_SUCCESS && startupCommand(wanted) == ERROR_SUCCESS &&
+               lstrcmpiW(actual, wanted) == 0;
+  BOOL blocked = startupBlocked();
+  if (registered && !valid && repair && !blocked)
+    valid = setStartup(TRUE) == ERROR_SUCCESS;
+  SetWindowTextW(startupBox, blocked && registered
+      ? L"Start minimized at sign-in (disabled in Windows)"
+      : registered && !valid ? L"Start minimized at sign-in (path needs repair)"
+                             : L"Start minimized when I sign in to Windows");
+  SendMessageW(startupBox, BM_SETCHECK, valid && !blocked, 0);
+}
+
+static void changeStartup(void) {
+  BOOL enable = SendMessageW(startupBox, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  LSTATUS err = setStartup(enable);
+  refreshStartup(FALSE);
+  if (err != ERROR_SUCCESS) {
+    wchar_t message[240];
+    if (err == ERROR_FILENAME_EXCED_RANGE)
+      StringCchCopyW(message, ARRAYSIZE(message),
+                     L"The sign-in command is too long for Windows. Move PadClip to a shorter folder path and try again.");
+    else
+      StringCchPrintfW(message, ARRAYSIZE(message),
+                       L"Windows could not save the sign-in setting (error %ld).", err);
+    MessageBoxW(mainwin, message, L"PadClip", MB_ICONWARNING);
+  } else if (enable && startupBlocked() &&
+             MessageBoxW(mainwin, L"Windows has disabled PadClip under Startup apps. Open that setting to enable it?",
+                         L"PadClip", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+    if ((INT_PTR)ShellExecuteW(mainwin, L"open", L"ms-settings:startupapps",
+                                NULL, NULL, SW_SHOWNORMAL) <= 32)
+      MessageBoxW(mainwin, L"Open Task Manager, choose Startup apps, and enable PadClip.",
+                  L"PadClip", MB_ICONINFORMATION);
+  }
 }
 static void show(HWND h, const wchar_t *s) {
   wchar_t old[512];
@@ -278,13 +341,149 @@ static void poll(void) {
        any ? L"Controller connected. Minimize PadClip and open your game."
            : L"Waiting for an Xbox-compatible controller.");
 }
-static HWND child(const wchar_t *type, const wchar_t *text, int x, int y, int w,
-                  int h, int id) {
-  HWND c = CreateWindowW(type, text, WS_CHILD | WS_VISIBLE, x, y, w, h, mainwin,
-                         (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
-  SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-  return c;
+static HWND minimizeButton, settingsLabel;
+static HFONT uiFont;
+static UINT uiDpi = 96;
+static BOOL controlsReady;
+static const DWORD windowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+
+static int px(int logical) { return MulDiv(logical, uiDpi, 96); }
+
+static HWND child(const wchar_t *type, const wchar_t *text, int id, DWORD style) {
+  return CreateWindowW(type, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 1, 1,
+                       mainwin, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
 }
+
+static void updateFont(void) {
+  HFONT font = CreateFontW(-MulDiv(10, uiDpi, 72), 0, 0, 0, FW_NORMAL, FALSE,
+                          FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                          DEFAULT_PITCH, L"Segoe UI");
+  if (!font)
+    return;
+  for (HWND c = GetWindow(mainwin, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT))
+    SendMessageW(c, WM_SETFONT, (WPARAM)font, TRUE);
+  if (uiFont)
+    DeleteObject(uiFont);
+  uiFont = font;
+}
+
+static RECT workArea(HWND window) {
+  MONITORINFO monitor = {0};
+  monitor.cbSize = sizeof(monitor);
+  GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
+  return monitor.rcWork;
+}
+
+static UINT windowDpi(HWND window) {
+  typedef UINT (WINAPI *WindowDpiFn)(HWND);
+  WindowDpiFn getDpi = (WindowDpiFn)GetProcAddress(GetModuleHandleW(L"user32"), "GetDpiForWindow");
+  if (getDpi)
+    return getDpi(window);
+  HDC dc = GetDC(window);
+  UINT dpi = dc ? GetDeviceCaps(dc, LOGPIXELSY) : 96;
+  if (dc)
+    ReleaseDC(window, dc);
+  return dpi;
+}
+
+// Use client dimensions for layout, then add the title bar and resize borders.
+static SIZE outerSize(int width, int height) {
+  RECT r = {0, 0, px(width), px(height)};
+  typedef BOOL (WINAPI *AdjustForDpiFn)(LPRECT, DWORD, BOOL, DWORD, UINT);
+  AdjustForDpiFn adjust = (AdjustForDpiFn)GetProcAddress(GetModuleHandleW(L"user32"), "AdjustWindowRectExForDpi");
+  if (!adjust || !adjust(&r, windowStyle, FALSE, 0, uiDpi))
+    AdjustWindowRectEx(&r, windowStyle, FALSE, 0);
+  SIZE size = {r.right - r.left, r.bottom - r.top};
+  return size;
+}
+
+static void fitToDisplay(HWND window, RECT requested) {
+  MONITORINFO monitor = {0};
+  monitor.cbSize = sizeof(monitor);
+  GetMonitorInfoW(MonitorFromRect(&requested, MONITOR_DEFAULTTONEAREST), &monitor);
+  RECT area = monitor.rcWork;
+  int width = min(requested.right - requested.left, area.right - area.left);
+  int height = min(requested.bottom - requested.top, area.bottom - area.top);
+  int x = max(area.left, min(requested.left, area.right - width));
+  int y = max(area.top, min(requested.top, area.bottom - height));
+  SetWindowPos(window, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
+}
+
+static void place(HWND control, int x, int y, int w, int h, int scroll) {
+  // Convert edges separately so adjacent controls still align at fractional DPI.
+  MoveWindow(control, px(x), px(y) - scroll, px(x+w) - px(x), px(y+h) - px(y), TRUE);
+}
+
+static void layout(void) {
+  if (!controlsReady || IsIconic(mainwin))
+    return;
+  RECT client;
+  GetClientRect(mainwin, &client);
+  int width = MulDiv(client.right, 96, uiDpi);
+  const int margin = 14, gap = 8;
+  int content = max(1, width - 2 * margin);
+  int columns = content >= 430 ? 3 : content >= 280 ? 2 : 1;
+  int rows = (3 + columns - 1) / columns;
+  int actionsY = 98, detailsY = actionsY + rows * 42 + 4;
+  int checkH = content < 330 ? 40 : 30;
+  int settingsY = detailsY + 58;
+  int checksY = settingsY + 26;
+  int updateY = checksY + checkH * 3 + 6;
+  SCROLLINFO si = {0};
+  si.cbSize = sizeof(si);
+  si.fMask = SIF_RANGE | SIF_PAGE;
+  si.nMax = px(updateY + 36 + margin) - 1;
+  si.nPage = client.bottom;
+  SetScrollInfo(mainwin, SB_VERT, &si, TRUE);
+  RECT actual;
+  GetClientRect(mainwin, &actual);
+  if (actual.right != client.right) {
+    layout();
+    return;
+  }
+  int scroll = GetScrollPos(mainwin, SB_VERT);
+  place(binding, margin, 12, content, 40, scroll);
+  place(status, margin, 55, content, 40, scroll);
+  HWND actions[] = {change, minimizeButton, recordButton};
+  for (int i = 0; i < 3; ++i) {
+    int col = i % columns;
+    int left = col * (content + gap) / columns;
+    int right = (col+1) * (content + gap) / columns - gap;
+    place(actions[i], margin + left, actionsY + i / columns * 42, right - left, 34, scroll);
+  }
+  place(details, margin, detailsY, content, 54, scroll);
+  place(settingsLabel, margin, settingsY, content, 24, scroll);
+  place(trayBox, margin, checksY, content, checkH, scroll);
+  place(closeTrayBox, margin, checksY + checkH, content, checkH, scroll);
+  place(startupBox, margin, checksY + checkH * 2, content, checkH, scroll);
+  place(updateButton, margin, updateY, min(content, 190), 36, scroll);
+}
+
+static void scrollTo(int pos) {
+  SetScrollPos(mainwin, SB_VERT, pos, TRUE);
+  layout();
+}
+
+static void scrollCommand(WPARAM command) {
+  SCROLLINFO si = {0};
+  si.cbSize = sizeof(si);
+  si.fMask = SIF_ALL;
+  GetScrollInfo(mainwin, SB_VERT, &si);
+  int pos = si.nPos;
+  switch (LOWORD(command)) {
+  case SB_LINEUP: pos -= px(24); break;
+  case SB_LINEDOWN: pos += px(24); break;
+  case SB_PAGEUP: pos -= (int)si.nPage; break;
+  case SB_PAGEDOWN: pos += (int)si.nPage; break;
+  case SB_TOP: pos = si.nMin; break;
+  case SB_BOTTOM: pos = si.nMax; break;
+  case SB_THUMBPOSITION: case SB_THUMBTRACK: pos = si.nTrackPos; break;
+  default: return;
+  }
+  scrollTo(pos);
+}
+
 static void exitPadClip(void) {
   if (worker) {
     closing = TRUE;
@@ -302,6 +501,44 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   }
   switch (msg) {
+  case WM_SIZE:
+    layout();
+    return 0;
+  case WM_GETMINMAXINFO: {
+    RECT area = workArea(h);
+    SIZE minimum = outerSize(280, 220);
+    MINMAXINFO *limits = (MINMAXINFO *)l;
+    limits->ptMinTrackSize.x = min(minimum.cx, area.right - area.left);
+    limits->ptMinTrackSize.y = min(minimum.cy, area.bottom - area.top);
+    return 0;
+  }
+  case WM_DPICHANGED:
+    uiDpi = HIWORD(w);
+    if (controlsReady) {
+      updateFont();
+      fitToDisplay(h, *(RECT *)l);
+      layout();
+    }
+    return 0;
+  case WM_DISPLAYCHANGE:
+  case WM_SETTINGCHANGE:
+    if (controlsReady && (msg == WM_DISPLAYCHANGE || w == SPI_SETWORKAREA) &&
+        !IsIconic(h) && !IsZoomed(h)) {
+      RECT current;
+      GetWindowRect(h, &current);
+      fitToDisplay(h, current);
+    }
+    break;
+  case WM_VSCROLL:
+    scrollCommand(w);
+    return 0;
+  case WM_MOUSEWHEEL:
+    scrollTo(GetScrollPos(h, SB_VERT) - MulDiv(GET_WHEEL_DELTA_WPARAM(w), px(48), WHEEL_DELTA));
+    return 0;
+  case WM_ACTIVATE:
+    if (LOWORD(w) != WA_INACTIVE && controlsReady)
+      refreshStartup(FALSE);
+    break;
   case WM_SYSCOMMAND:
     if ((w & 0xfff0) == SC_MINIMIZE && trayMode) {
       minimize(trayMode);
@@ -356,12 +593,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       saveTrayPreference(closeTrayBox, L"CloseToTray", &closeToTray);
       break;
     case 5:
-      if (!setStartup(SendMessageW(startupBox, BM_GETCHECK, 0, 0) ==
-                      BST_CHECKED)) {
-        SendMessageW(startupBox, BM_SETCHECK, startupEnabled(), 0);
-        MessageBoxW(h, L"Could not update the startup setting.", L"PadClip",
-                    MB_ICONWARNING);
-      }
+      changeStartup();
       break;
     case 6:
       if (!worker && !updating && !closing && !learning && beginUpdate(h)) {
@@ -435,6 +667,15 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
           MessageBoxW(h, L"The update checker could not run. Please try again.",
                       L"PadClip updates", MB_ICONWARNING);
       }
+    } else if (w == 5 && startupTrayRetries) {
+      if (!trayMode || !IsIconic(h))
+        startupTrayRetries = 0;
+      else {
+        --startupTrayRetries;
+        minimize(TRUE);
+      }
+      if (inTray || !startupTrayRetries)
+        KillTimer(h, 5);
     } else if (w == 3) {
       KillTimer(h, 3);
       XINPUT_VIBRATION v = {0};
@@ -453,12 +694,11 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
 }
 int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   (void)prev;
-  (void)cmd;
-  SetProcessDPIAware();
+
   HANDLE mutex = CreateMutexW(NULL, FALSE, L"Local\\8BitTradePadClip");
   if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
     HWND h = FindWindowW(L"8BitTradePadClip", NULL);
-    if (h) {
+    if (h && lstrcmpiW(cmd, L"--startup") != 0) {
       PostMessageW(h, WM_APP + 4, 0, 0);
     }
     return 0;
@@ -488,28 +728,35 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
     return 1;
   mainwin =
       CreateWindowW(wc.lpszClassName, L"PadClip  |  8BitTrade",
-                    WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT,
-                    CW_USEDEFAULT, 560, 461, NULL, NULL, app, NULL);
+                    windowStyle, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                    CW_USEDEFAULT, NULL, NULL, app, NULL);
   if (!mainwin)
     return 1;
-  binding = child(L"STATIC", L"", 18, 22, 510, 38, 0);
-  status = child(L"STATIC", L"", 18, 68, 510, 38, 0);
-  change = child(L"BUTTON", L"", 18, 116, 160, 35, 1);
-  child(L"BUTTON", L"Minimize", 190, 116, 120, 35, 2);
-  recordButton = child(L"BUTTON", L"Start recording", 324, 116, 160, 35, 3);
-  details = child(L"STATIC", L"Ready to record.", 18, 174, 510, 58, 0);
-  child(L"STATIC", L"Settings", 18, 235, 510, 22, 0);
-  trayBox = child(L"BUTTON", L"Minimize to system tray", 18, 261, 460, 27, 4);
-  closeTrayBox = child(L"BUTTON", L"Close to system tray", 18, 292, 460, 27, 7);
-  startupBox = child(L"BUTTON", L"Start minimized when I sign in to Windows",
-                     18, 323, 480, 28, 5);
-  updateButton = child(L"BUTTON", L"Check for updates?", 18, 363, 178, 32, 6);
-  SendMessageW(trayBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
-  SendMessageW(closeTrayBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
+  uiDpi = windowDpi(mainwin);
+  binding = child(L"STATIC", L"", 0, SS_NOPREFIX);
+  status = child(L"STATIC", L"", 0, SS_NOPREFIX);
+  change = child(L"BUTTON", L"", 1, BS_PUSHBUTTON);
+  minimizeButton = child(L"BUTTON", L"Minimize", 2, BS_PUSHBUTTON);
+  recordButton = child(L"BUTTON", L"Start recording", 3, BS_PUSHBUTTON);
+  details = child(L"STATIC", L"Ready to record.", 0, SS_NOPREFIX);
+  settingsLabel = child(L"STATIC", L"Settings", 0, SS_NOPREFIX);
+  DWORD checkStyle = BS_AUTOCHECKBOX | BS_MULTILINE;
+  trayBox = child(L"BUTTON", L"Minimize to system tray", 4, checkStyle);
+  closeTrayBox = child(L"BUTTON", L"Close to system tray", 7, checkStyle);
+  startupBox = child(L"BUTTON", L"", 5, checkStyle);
+  updateButton = child(L"BUTTON", L"Check for updates?", 6, BS_PUSHBUTTON);
+  controlsReady = TRUE;
+  updateFont();
+  RECT area = workArea(mainwin);
+  SIZE initial = outerSize(552, 396);
+  int x = area.left + max(0, (area.right - area.left - initial.cx) / 2);
+  int y = area.top + max(0, (area.bottom - area.top - initial.cy) / 2);
+  RECT initialRect = {x, y, x + initial.cx, y + initial.cy};
+  fitToDisplay(mainwin, initialRect);
+  layout();
   SendMessageW(closeTrayBox, BM_SETCHECK, closeToTray, 0);
-  SendMessageW(startupBox, BM_SETSTYLE, BS_AUTOCHECKBOX, TRUE);
   SendMessageW(trayBox, BM_SETCHECK, trayMode, 0);
-  SendMessageW(startupBox, BM_SETCHECK, startupEnabled(), 0);
+  refreshStartup(TRUE);
   notice = CreateWindowExW(
       WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
       L"STATIC", L"", WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE, 0, 0,
@@ -517,8 +764,13 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   SetWindowDisplayAffinity(notice, 0x11);
   finish();
   poll();
-  if (lstrcmpW(cmd, L"--startup") == 0)
+  if (lstrcmpiW(cmd, L"--startup") == 0) {
     minimize(trayMode);
+    if (trayMode && !inTray) {
+      startupTrayRetries = 30;
+      SetTimer(mainwin, 5, 1000, NULL);
+    }
+  }
   else {
     ShowWindow(mainwin, mode);
     showReleaseNotes(mainwin, lstrcmpW(cmd, L"--updated") == 0);
@@ -528,6 +780,8 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
+  if (uiFont)
+    DeleteObject(uiFont);
   UnregisterClassW(wc.lpszClassName, app);
   DestroyIcon(smallAppIcon);
   DestroyIcon(wc.hIcon);

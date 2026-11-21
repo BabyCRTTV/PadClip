@@ -5,6 +5,8 @@ on:
       - '8BitTrade-PadClip-Windows.zip'
       - 'update.json'
       - 'tests/windows_update.py'
+      - 'tests/windows_startup_layout.py'
+      - 'tests/dpi_layout.c'
       - '.github/workflows/windows-update.yml'
 permissions:
   contents: read
@@ -16,3 +18,10 @@ jobs:
       - uses: actions/checkout@v6
       - name: Exercise packaged updater and relaunch
         run: python tests/windows_update.py
+      - name: Verify sign-in registration, launch and window resizing
+        run: python tests/windows_startup_layout.py
+      - name: Verify handheld DPI transitions and portrait layout
+        run: |
+          gcc -Os -DUNICODE -D__CRT__NO_INLINE -D_WIN32_WINNT=0x0A00 -municode tests/dpi_layout.c updates.c -lcrypt32 -lxinput1_4 -lshell32 -lgdi32 -ladvapi32 -o dpi-layout.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./dpi-layout.exe

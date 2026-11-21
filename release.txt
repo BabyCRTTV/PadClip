@@ -1,2 +1,4 @@
-1.2.1
-PadClip now has its own controller icon with a red recording dot. Look for it on the app window, taskbar, system tray, and desktop shortcuts.
+1.3.0
+PadClip checks and repairs outdated sign-in paths and shows when Windows has disabled startup.
+
+Resize or maximize the window. Text and controls scale with each monitor, and the layout adapts to handheld, portrait, and docked displays.

@@ -1,3 +1,5 @@
 1 ICON "PadClip.ico"
 101 RCDATA "updater.ps1"
 102 RCDATA "release.txt"
+
+1 24 "PadClip.manifest"

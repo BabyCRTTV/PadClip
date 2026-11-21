@@ -33,8 +33,13 @@ keep PadClip and any active recording running when you click X. This setting
 is independent of "Minimize to system tray".
 Enable "Start minimized when I sign in to Windows" to launch the listener
 using your chosen minimize behavior. Startup is off by default. Extract
-the app to its permanent folder before enabling startup. If you move it,
-turn the setting off and back on to update the executable path.
+the app to its permanent folder before enabling startup. After moving it, launch the new copy once to repair its sign-in path.
+If Windows disabled the startup entry, the checkbox shows that state and can
+open Windows Startup apps so you can enable PadClip there.
+
+The main window supports resizing and maximizing. Its controls and text
+adapt to monitor scaling, with stacked buttons in narrow windows and
+vertical scrolling when space is limited.
 
 Updates
 Choose "Check for updates?" in Settings while PadClip is idle. If a newer
