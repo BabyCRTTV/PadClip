@@ -19,6 +19,19 @@ HRESULT captureClip(HWND window, HANDLE stop, wchar_t *out, size_t n, const wcha
   return E_NOTIMPL;
 }
 
+// Windows ordinarily caps the track size at the physical host desktop.
+// Supply the same maximum a real monitor of this test size would provide.
+static WNDPROC appProc;
+static LRESULT CALLBACK testProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+  LRESULT result = CallWindowProcW(appProc, h, msg, w, l);
+  if (msg == WM_GETMINMAXINFO && testMonitor.right) {
+    MINMAXINFO *limits = (MINMAXINFO *)l;
+    limits->ptMaxTrackSize.x = testMonitor.right;
+    limits->ptMaxTrackSize.y = testMonitor.bottom;
+  }
+  return result;
+}
+
 static BOOL verifyLayout(UINT dpi, LONG width, LONG height) {
   testMonitor = (RECT){0, 0, width, height};
   RECT suggested = {0, 0, MulDiv(570, dpi, 96), MulDiv(450, dpi, 96)};
@@ -34,6 +47,7 @@ static BOOL verifyLayout(UINT dpi, LONG width, LONG height) {
   HFONT controlFont = (HFONT)SendMessageW(startupBox, WM_GETFONT, 0, 0);
   BOOL ok = GetObjectW(controlFont, sizeof(font), &font) == sizeof(font) &&
             font.lfHeight == -MulDiv(10, dpi, 72) &&
+            frame.right == suggested.right && frame.bottom == suggested.bottom &&
             frame.right <= width && frame.bottom <= height &&
             update.right <= client.right && update.bottom <= client.bottom &&
             first.top == last.top && first.right < last.left &&
@@ -47,6 +61,7 @@ static int result;
 static VOID CALLBACK runCases(HWND window, UINT message, UINT_PTR id, DWORD time) {
   KillTimer(NULL, id);
   restore();
+  appProc = (WNDPROC)SetWindowLongPtrW(mainwin, GWLP_WNDPROC, (LONG_PTR)testProc);
   result = !verifyLayout(144, 2560, 1600) || !verifyLayout(192, 2560, 1600) ||
            !verifyLayout(240, 2560, 1600) || !verifyLayout(192, 1600, 2560) ||
            !verifyLayout(96, 1920, 1080);
