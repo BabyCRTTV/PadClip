@@ -146,6 +146,9 @@ def main():
             old = subprocess.Popen([app, "--updated"])
             try:
                 dismiss("What's new in PadClip 0.0.0", notes.splitlines()[0])
+                # This runner has a fresh PadClip profile.
+                window = UI.FindWindowW("8BitTradePadClip", None)
+                assert UI.SendMessageW(UI.GetDlgItem(window, 5), 0xF0, 0, 0) == 1
                 state["version"] = "0.0.0"
                 check()
                 dismiss("PadClip updates", "up to date")

@@ -2,6 +2,7 @@
 // The hosted Windows display cannot physically switch to a Legion Go panel.
 #include <windows.h>
 #include <stdio.h>
+#include <shellapi.h>
 static RECT testMonitor;
 static BOOL WINAPI monitorInfo(HMONITOR monitor, LPMONITORINFO info) {
   BOOL result = GetMonitorInfoW(monitor, info);
@@ -10,6 +11,12 @@ static BOOL WINAPI monitorInfo(HMONITOR monitor, LPMONITORINFO info) {
   return result;
 }
 
+static BOOL shellUnavailable;
+static BOOL WINAPI testTrayIcon(DWORD action, PNOTIFYICONDATAW data) {
+  return !shellUnavailable && Shell_NotifyIconW(action, data);
+}
+
+#define Shell_NotifyIconW testTrayIcon
 #define GetMonitorInfoW monitorInfo
 #define wWinMain padClipMain
 #include "../padclip.c"
@@ -57,12 +64,34 @@ static BOOL verifyLayout(UINT dpi, LONG width, LONG height) {
   return ok;
 }
 
+static BOOL verifyDelayedTray(void) {
+  ShowWindow(mainwin, SW_HIDE);
+  shellUnavailable = TRUE;
+  registerHiddenTrayIcon();
+  SendMessageW(mainwin, WM_TIMER, 5, 0);
+  BOOL hidden = waitingForTray && !inTray && !IsWindowVisible(mainwin);
+  shellUnavailable = FALSE;
+  SendMessageW(mainwin, WM_TIMER, 5, 0);
+  hidden = hidden && inTray && !waitingForTray && !IsWindowVisible(mainwin);
+  // Simulate Explorer losing its icons, then taking time to accept new ones.
+  trayIcon(NIM_DELETE);
+  shellUnavailable = TRUE;
+  SendMessageW(mainwin, explorerRestart, 0, 0);
+  hidden = hidden && waitingForTray && !IsWindowVisible(mainwin);
+  shellUnavailable = FALSE;
+  SendMessageW(mainwin, WM_TIMER, 5, 0);
+  hidden = hidden && inTray && !waitingForTray && !IsWindowVisible(mainwin);
+  restore();
+  printf("Delayed notification area and Explorer restart: %s\n", hidden ? "pass" : "fail");
+  return hidden && IsWindowVisible(mainwin);
+}
+
 static int result;
 static VOID CALLBACK runCases(HWND window, UINT message, UINT_PTR id, DWORD time) {
   KillTimer(NULL, id);
   restore();
   appProc = (WNDPROC)SetWindowLongPtrW(mainwin, GWLP_WNDPROC, (LONG_PTR)testProc);
-  result = !verifyLayout(144, 2560, 1600) || !verifyLayout(192, 2560, 1600) ||
+  result = !verifyDelayedTray() || !verifyLayout(144, 2560, 1600) || !verifyLayout(192, 2560, 1600) ||
            !verifyLayout(240, 2560, 1600) || !verifyLayout(192, 1600, 2560) ||
            !verifyLayout(96, 1920, 1080);
   exitPadClip();
@@ -71,6 +100,6 @@ static VOID CALLBACK runCases(HWND window, UINT message, UINT_PTR id, DWORD time
 int wmain(void) {
   if (!SetTimer(NULL, 0, 200, runCases))
     return 1;
-  int status = padClipMain(GetModuleHandleW(NULL), NULL, L"--startup", SW_SHOWNORMAL);
+  int status = padClipMain(GetModuleHandleW(NULL), NULL, L"", SW_SHOWNORMAL);
   return status ? status : result;
 }

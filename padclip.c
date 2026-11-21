@@ -39,7 +39,7 @@ static BOOL learning, armed, latched[4];
 static int owner = -1;
 static const wchar_t config[] = L"Software\\8BitTrade\\PadClip";
 static BOOL trayMode, closeToTray, inTray;
-static int startupTrayRetries;
+static BOOL waitingForTray;
 enum { TRAY_OPEN = 100, TRAY_EXIT };
 static UINT explorerRestart;
 static HICON smallAppIcon;
@@ -57,14 +57,26 @@ static BOOL trayIcon(DWORD action) {
   StringCchCopyW(icon.szTip, 128, L"PadClip");
   return Shell_NotifyIconW(action, &icon);
 }
+// A sign-in window starts hidden. Explorer may accept icons only later.
+static void registerHiddenTrayIcon(void) {
+  inTray = trayIcon(NIM_ADD) || trayIcon(NIM_MODIFY);
+  waitingForTray = !inTray;
+  if (waitingForTray)
+    SetTimer(mainwin, 5, 2000, NULL);
+  else
+    KillTimer(mainwin, 5);
+}
 static void restore(void) {
-  startupTrayRetries = 0;
+  waitingForTray = FALSE;
   KillTimer(mainwin, 5);
   if (inTray) {
     trayIcon(NIM_DELETE);
     inTray = FALSE;
   }
-  ShowWindow(mainwin, SW_RESTORE);
+  SetWindowPos(mainwin, NULL, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
+  if (IsIconic(mainwin))
+    ShowWindow(mainwin, SW_RESTORE);
   SetForegroundWindow(mainwin);
 }
 static void minimize(BOOL useTray) {
@@ -125,6 +137,33 @@ static LSTATUS setStartup(BOOL enable) {
                          (lstrlenW(command) + 1) * sizeof(*command));
 }
 
+static BOOL startupArgument(const wchar_t *cmd) {
+  int count = 0;
+  wchar_t **args = CommandLineToArgvW(cmd, &count);
+  BOOL found = FALSE;
+  for (int i = 0; args && i < count; ++i)
+    if (!lstrcmpiW(args[i], L"--startup"))
+      found = TRUE;
+  LocalFree(args);
+  return found;
+}
+
+static BOOL hasStartupEntry(void) {
+  return RegGetValueW(HKEY_CURRENT_USER, runKey, L"PadClip", RRF_RT_REG_SZ,
+                      NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+static void initializeStartupDefault(void) {
+  HKEY key;
+  DWORD disposition;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, config, 0, NULL, 0, KEY_QUERY_VALUE,
+                      NULL, &key, &disposition) != ERROR_SUCCESS)
+    return;
+  RegCloseKey(key);
+  if (disposition == REG_CREATED_NEW_KEY && !startupBlocked() && !hasStartupEntry())
+    setStartup(TRUE);
+}
+
 // An existing registration is the user's opt-in, including in older versions.
 // Do not recreate a registration the user removed or change Windows' approval.
 static void refreshStartup(BOOL repair) {
@@ -141,9 +180,9 @@ static void refreshStartup(BOOL repair) {
   if (registered && !valid && repair && !blocked)
     valid = setStartup(TRUE) == ERROR_SUCCESS;
   SetWindowTextW(startupBox, blocked && registered
-      ? L"Start minimized at sign-in (disabled in Windows)"
-      : registered && !valid ? L"Start minimized at sign-in (path needs repair)"
-                             : L"Start minimized when I sign in to Windows");
+      ? L"Start in the tray at sign-in (disabled in Windows)"
+      : registered && !valid ? L"Start in the tray at sign-in (path needs repair)"
+                             : L"Start in the system tray when I sign in");
   SendMessageW(startupBox, BM_SETCHECK, valid && !blocked, 0);
 }
 
@@ -495,9 +534,8 @@ static void exitPadClip(void) {
   }
 }
 static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
-  if (explorerRestart && msg == explorerRestart && inTray) {
-    if (!trayIcon(NIM_ADD))
-      restore();
+  if (explorerRestart && msg == explorerRestart && (inTray || waitingForTray)) {
+    registerHiddenTrayIcon();
     return 0;
   }
   switch (msg) {
@@ -668,15 +706,8 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
           MessageBoxW(h, L"The update checker could not run. Please try again.",
                       L"PadClip updates", MB_ICONWARNING);
       }
-    } else if (w == 5 && startupTrayRetries) {
-      if (!trayMode || !IsIconic(h))
-        startupTrayRetries = 0;
-      else {
-        --startupTrayRetries;
-        minimize(TRUE);
-      }
-      if (inTray || !startupTrayRetries)
-        KillTimer(h, 5);
+    } else if (w == 5 && waitingForTray) {
+      registerHiddenTrayIcon();
     } else if (w == 3) {
       KillTimer(h, 3);
       XINPUT_VIBRATION v = {0};
@@ -696,14 +727,19 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
 int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   (void)prev;
 
+  BOOL signIn = startupArgument(cmd);
+  if (signIn && (!hasStartupEntry() || startupBlocked()))
+    return 0;
   HANDLE mutex = CreateMutexW(NULL, FALSE, L"Local\\8BitTradePadClip");
   if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
     HWND h = FindWindowW(L"8BitTradePadClip", NULL);
-    if (h && lstrcmpiW(cmd, L"--startup") != 0) {
+    if (h && !signIn) {
       PostMessageW(h, WM_APP + 4, 0, 0);
     }
     return 0;
   }
+  if (!signIn)
+    initializeStartupDefault();
   DWORD v = 0, size = sizeof(v);
   if (RegGetValueW(HKEY_CURRENT_USER, config, L"Shortcut", RRF_RT_REG_DWORD,
                    NULL, &v, &size) == ERROR_SUCCESS &&
@@ -765,14 +801,9 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   SetWindowDisplayAffinity(notice, 0x11);
   finish();
   poll();
-  if (lstrcmpiW(cmd, L"--startup") == 0) {
-    minimize(trayMode);
-    if (trayMode && !inTray) {
-      startupTrayRetries = 30;
-      SetTimer(mainwin, 5, 1000, NULL);
-    }
-  }
-  else {
+  if (signIn) {
+    registerHiddenTrayIcon();
+  } else {
     ShowWindow(mainwin, mode);
     showReleaseNotes(mainwin, lstrcmpW(cmd, L"--updated") == 0);
   }

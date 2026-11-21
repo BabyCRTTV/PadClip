@@ -34,6 +34,54 @@ def close(app, main):
     assert app.wait(timeout=10) == 0
 
 
+class TrayIconID(ctypes.Structure):
+    _fields_ = [("size", wintypes.DWORD), ("window", wintypes.HWND),
+                ("id", wintypes.UINT), ("guid", ctypes.c_ubyte * 16)]
+
+
+def exercise_tray_launch(exe, command, minimize_to_tray, show_mode):
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\8BitTrade\PadClip") as key:
+        winreg.SetValueEx(key, "Tray", 0, winreg.REG_DWORD, int(minimize_to_tray))
+    launch = subprocess.STARTUPINFO()
+    launch.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    launch.wShowWindow = show_mode
+    app = subprocess.Popen(command, startupinfo=launch)
+    try:
+        main, box = startup_window()
+        icon = TrayIconID(ctypes.sizeof(TrayIconID), main, 1)
+        rect = wintypes.RECT()
+        get_rect = ctypes.windll.shell32.Shell_NotifyIconGetRect
+        get_rect.argtypes = [ctypes.POINTER(TrayIconID), ctypes.POINTER(wintypes.RECT)]
+
+        def registered():
+            assert not UI.IsWindowVisible(main), "Sign-in opened the PadClip window"
+            return get_rect(ctypes.byref(icon), ctypes.byref(rect)) >= 0
+        wait(registered, "PadClip icon in Explorer's notification area")
+        # The controller polling loop must keep running with the window hidden.
+        status = wait(lambda: UI.FindWindowExW(main, None, "Static",
+                      "Waiting for an Xbox-compatible controller."), "listener status")
+        marker = ctypes.create_unicode_buffer("Testing a fresh poll")
+        UI.SendMessageW(status, 0x0C, 0, ctypes.addressof(marker))
+        def polled_again():
+            text = ctypes.create_unicode_buffer(128)
+            UI.GetWindowTextW(status, text, len(text))
+            return text.value.startswith("Waiting for an Xbox")
+        wait(polled_again, "controller poll while hidden")
+        subprocess.run(command, check=True, timeout=10)
+        assert not UI.IsWindowVisible(main)
+        if show_mode == 3:
+            subprocess.run([exe], check=True, timeout=10)
+        else:
+            UI.PostMessageW(main, 0x8003, 1, 0x202)
+        wait(lambda: UI.IsWindowVisible(main) and not UI.IsIconic(main), "explicit open")
+        print(f"Tray launch passed: manual minimize={minimize_to_tray}, shell mode={show_mode}")
+        close(app, main)
+    finally:
+        if app.poll() is None:
+            app.kill()
+            app.wait()
+
+
 def geometry(handle):
     rect = wintypes.RECT()
     assert UI.GetWindowRect(handle, ctypes.byref(rect))
@@ -83,13 +131,12 @@ def main():
         assert command == f'"{exe}" --startup'
         exercise_layout(main)
         close(app, main)
-        app = subprocess.Popen(command, cwd=Path.cwd())
+        for minimize_to_tray in (False, True):
+            for shell_mode in (1, 2, 3):  # Normal, minimized, maximized.
+                exercise_tray_launch(exe, command, minimize_to_tray, shell_mode)
+        app = subprocess.Popen([exe])
         main, box = startup_window()
-        wait(lambda: UI.IsIconic(main), "minimized sign-in launch")
-        # A second invocation from Windows must not bring the first to the front.
-        subprocess.run(command, check=True, timeout=10)
-        assert UI.IsIconic(main)
-        UI.SendMessageW(main, 0x8004, 0, 0)
+        wait(lambda: UI.IsWindowVisible(main), "manual launch")
         UI.SendMessageW(box, 0xF5, 0, 0)
         try:
             reg_get(RUN)
@@ -97,6 +144,13 @@ def main():
             pass
         else:
             raise AssertionError("Disabling startup left its entry behind")
+        close(app, main)
+        subprocess.run(command, check=True, timeout=10)  # Stale sign-in after opt-out.
+        assert not UI.FindWindowW("8BitTradePadClip", None)
+        app = subprocess.Popen([exe])
+        main, box = startup_window()
+        wait(lambda: UI.IsWindowVisible(main), "manual launch after opt-out")
+        assert UI.SendMessageW(box, 0xF0, 0, 0) == 0
         UI.SendMessageW(box, 0xF5, 0, 0)
         assert reg_get(RUN) == command
         close(app, main)
