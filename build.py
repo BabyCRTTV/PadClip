@@ -34,7 +34,7 @@ def build():
                        cwd=ROOT, check=True)
         exe = out / "PadClip.exe"
         subprocess.run([cxx, *objects, res, "-municode", "-mwindows", "-static", "-s",
-                        "-Wl,--no-insert-timestamp", "-lcrypt32", "-ld3d11", "-ldxgi",
+                        "-Wl,--no-insert-timestamp", "-lcrypt32", "-lwtsapi32", "-ld3d11", "-ldxgi",
                         "-lmfreadwrite", "-lmfplat", "-lmfuuid", "-lole32", "-luuid",
                         "-lgdi32", "-lshell32", "-lshlwapi", "-ladvapi32", "-lxinput1_4",
                         "-o", exe], check=True)

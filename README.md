@@ -32,6 +32,10 @@ may put the icon in the hidden-icons menu. By default, closing the window exits.
 keep PadClip and any active recording running when you click X. This setting
 is independent of "Minimize to system tray".
 On a fresh install, PadClip starts in the system tray at Windows sign-in.
+The listener also returns to the tray when you lock and unlock Windows.
+Startup-folder shortcuts and duplicate launches during sign-in stay in the tray.
+During the first minute of sign-in, use the tray icon, a desktop shortcut, or
+`PadClip.exe --open` to open the window explicitly.
 Your recording shortcut is active immediately. Click the tray icon to open
 the window. Clear "Start in the system tray when I sign in" to turn this off.
 Upgrades keep your existing sign-in preference. Extract the app to its

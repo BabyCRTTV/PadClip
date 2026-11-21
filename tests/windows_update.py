@@ -177,7 +177,7 @@ def main():
                 UI.PostMessageW(window, 0x111, 101, 0)  # Tray menu's Exit command.
                 wait(lambda: not UI.IsWindow(window), "explicit tray exit")
                 # A normal launch remembers the preference. Disabling it restores exit on X.
-                reopened = subprocess.Popen([app])
+                reopened = subprocess.Popen([app, "--open"])
                 try:
                     window = wait(lambda: UI.FindWindowW("8BitTradePadClip", None), "relaunch")
                     close_box = wait(lambda: UI.GetDlgItem(window, 7), "close checkbox")

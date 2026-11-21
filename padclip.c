@@ -3,6 +3,7 @@
 #include <strsafe.h>
 #include <windows.h>
 #include <xinput.h>
+#include <wtsapi32.h>
 #include "updates.h"
 
 static HWND mainwin, binding, status, change, updateButton;
@@ -39,7 +40,9 @@ static BOOL learning, armed, latched[4];
 static int owner = -1;
 static const wchar_t config[] = L"Software\\8BitTrade\\PadClip";
 static BOOL trayMode, closeToTray, inTray;
-static BOOL waitingForTray;
+static BOOL waitingForTray, keepWindowHidden, sessionNotifications;
+static ULONGLONG ignorePlainOpenUntil;
+enum { SIGNIN_SECONDS = 60 };
 enum { TRAY_OPEN = 100, TRAY_EXIT };
 static UINT explorerRestart;
 static HICON smallAppIcon;
@@ -125,20 +128,72 @@ static LSTATUS setStartup(BOOL enable) {
                          (lstrlenW(command) + 1) * sizeof(*command));
 }
 
-static BOOL startupArgument(const wchar_t *cmd) {
+typedef enum { LAUNCH_PLAIN, LAUNCH_SIGNIN, LAUNCH_OPEN, LAUNCH_UPDATED } LaunchMode;
+
+static BOOL shortcutInFolder(const wchar_t *link, REFKNOWNFOLDERID folder) {
+  PWSTR path = NULL;
+  if (FAILED(SHGetKnownFolderPath(folder, 0, NULL, &path)))
+    return FALSE;
+  size_t n = wcslen(path);
+  BOOL inside = _wcsnicmp(link, path, n) == 0 && link[n] == L'\\';
+  CoTaskMemFree(path);
+  return inside;
+}
+
+static LaunchMode launchMode(const wchar_t *cmd) {
   int count = 0;
   wchar_t **args = CommandLineToArgvW(cmd, &count);
-  BOOL found = FALSE;
-  for (int i = 0; args && i < count; ++i)
-    if (!lstrcmpiW(args[i], L"--startup"))
-      found = TRUE;
+  LaunchMode mode = LAUNCH_PLAIN;
+  for (int i = 0; args && i < count; ++i) {
+    if (!lstrcmpiW(args[i], L"--startup")) { mode = LAUNCH_SIGNIN; break; }
+    if (!lstrcmpiW(args[i], L"--updated")) mode = LAUNCH_UPDATED;
+    else if (!lstrcmpiW(args[i], L"--open")) mode = LAUNCH_OPEN;
+  }
   LocalFree(args);
-  return found;
+  if (mode != LAUNCH_PLAIN)
+    return mode;
+  STARTUPINFOW launch = {0};
+  GetStartupInfoW(&launch);
+  if ((launch.dwFlags & STARTF_TITLEISLINKNAME) && launch.lpTitle && launch.lpTitle[0]) {
+    return shortcutInFolder(launch.lpTitle, &FOLDERID_Startup) ||
+           shortcutInFolder(launch.lpTitle, &FOLDERID_CommonStartup) ? LAUNCH_SIGNIN : LAUNCH_OPEN;
+  }
+  return LAUNCH_PLAIN;
+}
+
+// A restored process or another bare startup entry can run before the Run command.
+static BOOL justSignedIn(void) {
+  LPWSTR data = NULL;
+  DWORD bytes = 0;
+  BOOL recent = FALSE;
+  if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+                                  WTSSessionInfo, &data, &bytes) && bytes >= sizeof(WTSINFOW)) {
+    const WTSINFOW *session = (WTSINFOW *)data;
+    LONGLONG age = session->CurrentTime.QuadPart - session->LogonTime.QuadPart;
+    recent = session->LogonTime.QuadPart > 0 && age >= 0 &&
+             age < SIGNIN_SECONDS * 10000000LL;
+  }
+  if (data)
+    WTSFreeMemory(data);
+  return recent;
 }
 
 static BOOL hasStartupEntry(void) {
   return RegGetValueW(HKEY_CURRENT_USER, runKey, L"PadClip", RRF_RT_REG_SZ,
                       NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+static BOOL traySignInEnabled(void) {
+  return hasStartupEntry() && !startupBlocked();
+}
+
+static void stayInTray(void) {
+  keepWindowHidden = TRUE;
+  ignorePlainOpenUntil = GetTickCount64() + SIGNIN_SECONDS * 1000;
+  SetWindowPos(mainwin, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                                          SWP_NOACTIVATE | SWP_HIDEWINDOW);
+  if (!inTray)
+    registerHiddenTrayIcon();
 }
 
 static void initializeStartupDefault(void) {
@@ -449,6 +504,8 @@ static RECT mediumBounds(HWND window) {
 }
 
 static void restore(void) {
+  keepWindowHidden = FALSE;
+  ignorePlainOpenUntil = 0;
   RECT bounds = mediumBounds(mainwin);
   waitingForTray = FALSE;
   KillTimer(mainwin, 5);
@@ -565,6 +622,15 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   }
   switch (msg) {
+  case WM_WINDOWPOSCHANGING:
+    if (keepWindowHidden)
+      ((WINDOWPOS *)l)->flags &= ~SWP_SHOWWINDOW;
+    break;
+  case WM_WTSSESSION_CHANGE:
+    if ((w == WTS_SESSION_LOCK || w == WTS_SESSION_UNLOCK ||
+         w == WTS_CONSOLE_CONNECT || w == WTS_REMOTE_CONNECT) && traySignInEnabled())
+      stayInTray();
+    return 0;
   case WM_SIZE:
     layout();
     return 0;
@@ -605,6 +671,8 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       refreshStartup(FALSE);
     break;
   case WM_SYSCOMMAND:
+    if (keepWindowHidden && ((w & 0xfff0) == SC_RESTORE || (w & 0xfff0) == SC_MAXIMIZE))
+      return 0;
     if ((w & 0xfff0) == SC_RESTORE && IsIconic(h)) {
       restore();
       return 0;
@@ -615,7 +683,8 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     }
     break;
   case WM_APP + 4:
-    restore();
+    if (w || GetTickCount64() >= ignorePlainOpenUntil)
+      restore();
     return 0;
   case WM_APP + 3:
     if (l == WM_LBUTTONUP)
@@ -736,6 +805,10 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
           MessageBoxW(h, L"The update checker could not run. Please try again.",
                       L"PadClip updates", MB_ICONWARNING);
       }
+    } else if (w == 6) {
+      sessionNotifications = WTSRegisterSessionNotification(h, NOTIFY_FOR_THIS_SESSION);
+      if (sessionNotifications)
+        KillTimer(h, 6);
     } else if (w == 5 && waitingForTray) {
       registerHiddenTrayIcon();
     } else if (w == 3) {
@@ -746,6 +819,8 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     }
     return 0;
   case WM_DESTROY:
+    if (sessionNotifications)
+      WTSUnRegisterSessionNotification(h);
     if (inTray)
       trayIcon(NIM_DELETE);
     closeUpdateHandles();
@@ -758,17 +833,21 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   (void)prev;
   (void)mode;
 
-  BOOL signIn = startupArgument(cmd);
-  if (signIn && (!hasStartupEntry() || startupBlocked()))
+  LaunchMode launch = launchMode(cmd);
+  BOOL signIn = launch == LAUNCH_SIGNIN;
+  if (signIn && !traySignInEnabled())
     return 0;
   HANDLE mutex = CreateMutexW(NULL, FALSE, L"Local\\8BitTradePadClip");
   if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
     HWND h = FindWindowW(L"8BitTradePadClip", NULL);
     if (h && !signIn) {
-      PostMessageW(h, WM_APP + 4, 0, 0);
+      PostMessageW(h, WM_APP + 4, launch != LAUNCH_PLAIN, 0);
     }
     return 0;
   }
+  if (launch == LAUNCH_PLAIN && traySignInEnabled() && justSignedIn())
+    signIn = TRUE;
+  keepWindowHidden = signIn;
   if (!signIn)
     initializeStartupDefault();
   DWORD v = 0, size = sizeof(v);
@@ -800,6 +879,9 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
                     CW_USEDEFAULT, NULL, NULL, app, NULL);
   if (!mainwin)
     return 1;
+  sessionNotifications = WTSRegisterSessionNotification(mainwin, NOTIFY_FOR_THIS_SESSION);
+  if (!sessionNotifications)
+    SetTimer(mainwin, 6, 10000, NULL);
   uiDpi = windowDpi(mainwin);
   binding = child(L"STATIC", L"", 0, SS_NOPREFIX);
   status = child(L"STATIC", L"", 0, SS_NOPREFIX);
@@ -828,10 +910,10 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   finish();
   poll();
   if (signIn) {
-    registerHiddenTrayIcon();
+    stayInTray();
   } else {
     restore();
-    showReleaseNotes(mainwin, lstrcmpW(cmd, L"--updated") == 0);
+    showReleaseNotes(mainwin, launch == LAUNCH_UPDATED);
   }
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {

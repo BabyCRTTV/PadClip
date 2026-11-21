@@ -1,4 +1,5 @@
 """Run the packaged app in a disposable Windows account and exercise its sign-in entry."""
+import os
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
@@ -39,7 +40,7 @@ class TrayIconID(ctypes.Structure):
                 ("id", wintypes.UINT), ("guid", ctypes.c_ubyte * 16)]
 
 
-def exercise_tray_launch(exe, command, minimize_to_tray, show_mode):
+def exercise_tray_launch(exe, command, minimize_to_tray, show_mode, desktop_link):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\8BitTrade\PadClip") as key:
         winreg.SetValueEx(key, "Tray", 0, winreg.REG_DWORD, int(minimize_to_tray))
     launch = subprocess.STARTUPINFO()
@@ -69,8 +70,12 @@ def exercise_tray_launch(exe, command, minimize_to_tray, show_mode):
         wait(polled_again, "controller poll while hidden")
         subprocess.run(command, check=True, timeout=10)
         assert not UI.IsWindowVisible(main)
+        # Previously every bare second process forced the background window open.
+        subprocess.run([exe], check=True, timeout=10)
+        UI.SendMessageW(main, 0, 0, 0)
+        assert not UI.IsWindowVisible(main)
         if show_mode == 3:
-            subprocess.run([exe], check=True, timeout=10)
+            os.startfile(desktop_link)
         else:
             UI.PostMessageW(main, 0x8003, 1, 0x202)
         wait(lambda: UI.IsWindowVisible(main) and not UI.IsIconic(main), "explicit open")
@@ -81,6 +86,23 @@ def exercise_tray_launch(exe, command, minimize_to_tray, show_mode):
         if app.poll() is None:
             app.kill()
             app.wait()
+
+
+def make_shortcuts(exe):
+    script = """
+    $ErrorActionPreference = 'Stop'
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($folder in 'DesktopDirectory','Startup') {
+        $path = Join-Path ([Environment]::GetFolderPath($folder)) ('PadClip-QA-' + [Guid]::NewGuid() + '.lnk')
+        $link = $shell.CreateShortcut($path)
+        $link.TargetPath = $env:PADCLIP_QA_EXE
+        $link.Save()
+        $path
+    }
+    """
+    return subprocess.check_output(["powershell", "-NoProfile", "-Command", script],
+                                   env=dict(os.environ, PADCLIP_QA_EXE=str(exe)),
+                                   text=True).splitlines()
 
 
 def geometry(handle):
@@ -106,7 +128,7 @@ def exercise_medium_reopen(exe):
         launch = subprocess.STARTUPINFO()
         launch.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         launch.wShowWindow = mode
-        app = subprocess.Popen([exe], startupinfo=launch)
+        app = subprocess.Popen([exe, "--open"], startupinfo=launch)
         try:
             main, _ = startup_window()
             wait(lambda: UI.IsWindowVisible(main), "explicit launch")
@@ -176,10 +198,36 @@ def main():
         exercise_layout(main)
         close(app, main)
         exercise_medium_reopen(exe)
-        for minimize_to_tray in (False, True):
-            for shell_mode in (1, 2, 3):  # Normal, minimized, maximized.
-                exercise_tray_launch(exe, command, minimize_to_tray, shell_mode)
-        app = subprocess.Popen([exe])
+        shortcuts = make_shortcuts(exe)
+        try:
+            desktop_link, startup_link = shortcuts
+            for minimize_to_tray in (False, True):
+                for shell_mode in (1, 2, 3):
+                    exercise_tray_launch(exe, command, minimize_to_tray, shell_mode, desktop_link)
+            for cycle in range(3):
+                os.startfile(startup_link)
+                main, _ = startup_window()
+                wait(lambda: UI.FindWindowExW(main, None, "Static",
+                     "Waiting for an Xbox-compatible controller."), "Startup shortcut listener")
+                subprocess.run(command, check=True, timeout=10)
+                assert not UI.IsWindowVisible(main)
+                os.startfile(desktop_link)
+                wait(lambda: UI.IsWindowVisible(main), "desktop shortcut")
+                assert_medium(main)
+                for reason in (7, 8):  # Lock, unlock: test each from an open window.
+                    UI.SendMessageW(main, 0x02B1, reason, 0)
+                    assert not UI.IsWindowVisible(main)
+                    UI.SendMessageW(main, 0x8004, 0, 0)  # Old unflagged duplicate.
+                    assert not UI.IsWindowVisible(main)
+                    UI.SendMessageW(main, 0x8003, 1, 0x202)
+                    assert_medium(main)
+                UI.PostMessageW(main, 0x111, 101, 0)
+                wait(lambda: not UI.IsWindow(main), "session test exit")
+                print(f"Startup-folder shortcut, desktop shortcut, lock and unlock cycle {cycle + 1} passed")
+        finally:
+            for link in shortcuts:
+                Path(link).unlink(missing_ok=True)
+        app = subprocess.Popen([exe, "--open"])
         main, box = startup_window()
         wait(lambda: UI.IsWindowVisible(main), "manual launch")
         UI.SendMessageW(box, 0xF5, 0, 0)
@@ -192,7 +240,7 @@ def main():
         close(app, main)
         subprocess.run(command, check=True, timeout=10)  # Stale sign-in after opt-out.
         assert not UI.FindWindowW("8BitTradePadClip", None)
-        app = subprocess.Popen([exe])
+        app = subprocess.Popen([exe, "--open"])
         main, box = startup_window()
         wait(lambda: UI.IsWindowVisible(main), "manual launch after opt-out")
         assert UI.SendMessageW(box, 0xF0, 0, 0) == 0
@@ -201,13 +249,15 @@ def main():
         close(app, main)
         disabled = bytes([3]) + bytes(11)
         reg_set(APPROVED, winreg.REG_BINARY, disabled)
-        app = subprocess.Popen([exe])
+        app = subprocess.Popen([exe, "--open"])
         main, box = startup_window()
         wait(lambda: UI.IsWindowVisible(main), "startup status")
         assert UI.SendMessageW(box, 0xF0, 0, 0) == 0
         label = ctypes.create_unicode_buffer(120)
         UI.GetWindowTextW(box, label, len(label))
         assert "disabled in Windows" in label.value
+        UI.SendMessageW(main, 0x02B1, 8, 0)
+        assert UI.IsWindowVisible(main)
         assert reg_get(APPROVED) == disabled
         close(app, main)
 
