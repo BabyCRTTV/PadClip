@@ -520,9 +520,10 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       layout();
     }
     return 0;
+  case WM_EXITSIZEMOVE:
   case WM_DISPLAYCHANGE:
   case WM_SETTINGCHANGE:
-    if (controlsReady && (msg == WM_DISPLAYCHANGE || w == SPI_SETWORKAREA) &&
+    if (controlsReady && (msg != WM_SETTINGCHANGE || w == SPI_SETWORKAREA) &&
         !IsIconic(h) && !IsZoomed(h)) {
       RECT current;
       GetWindowRect(h, &current);
