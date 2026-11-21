@@ -59,6 +59,12 @@ static BOOL verifyLayout(UINT dpi, LONG width, LONG height) {
             update.right <= client.right && update.bottom <= client.bottom &&
             first.top == last.top && first.right < last.left &&
             first.bottom - first.top >= MulDiv(33, dpi, 96);
+  restore();
+  GetWindowRect(mainwin, &frame);
+  RECT centered = mediumBounds(mainwin);
+  ok = ok && EqualRect(&centered, &frame) && !IsZoomed(mainwin) &&
+       frame.right - frame.left <= MulDiv(width, 4, 5) &&
+       frame.bottom - frame.top <= MulDiv(height, 4, 5);
   printf("%ldx%ld, %u DPI, client %ldx%ld: %s\n", width, height, dpi,
          client.right, client.bottom, ok ? "pass" : "fail");
   return ok;

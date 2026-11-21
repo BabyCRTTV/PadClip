@@ -39,7 +39,7 @@ permanent folder before launching it. After moving it, launch the new copy once 
 If Windows disabled the startup entry, the checkbox shows that state and can
 open Windows Startup apps so you can enable PadClip there.
 
-The main window supports resizing and maximizing. Its controls and text
+Opening PadClip centers a medium window on its monitor, sized to fit the available work area. The window supports resizing and maximizing. Its controls and text
 adapt to monitor scaling, with stacked buttons in narrow windows and
 vertical scrolling when space is limited.
 

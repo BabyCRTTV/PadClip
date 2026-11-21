@@ -1,4 +1,4 @@
 1.3.1
-PadClip now starts directly in the system tray at Windows sign-in, ready for your recording shortcut. The window stays hidden while Windows loads the tray. Click the icon to open it.
+PadClip now starts directly in the system tray at Windows sign-in, ready for your recording shortcut. The window stays hidden while Windows loads the tray. Opening PadClip brings it up at a centered, medium size for the current display, even after it was maximized.
 
 Sign-in startup is on for new installations. You can turn it off in Settings. Upgrades keep your previous choice.

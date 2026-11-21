@@ -74,6 +74,7 @@ def exercise_tray_launch(exe, command, minimize_to_tray, show_mode):
         else:
             UI.PostMessageW(main, 0x8003, 1, 0x202)
         wait(lambda: UI.IsWindowVisible(main) and not UI.IsIconic(main), "explicit open")
+        assert_medium(main)
         print(f"Tray launch passed: manual minimize={minimize_to_tray}, shell mode={show_mode}")
         close(app, main)
     finally:
@@ -86,6 +87,49 @@ def geometry(handle):
     rect = wintypes.RECT()
     assert UI.GetWindowRect(handle, ctypes.byref(rect))
     return rect
+
+
+def assert_medium(main):
+    assert UI.IsWindowVisible(main) and not UI.IsIconic(main) and not UI.IsZoomed(main)
+    area = wintypes.RECT()
+    assert UI.SystemParametersInfoW(48, 0, ctypes.byref(area), 0)  # SPI_GETWORKAREA
+    frame = geometry(main)
+    assert abs(frame.left + frame.right - area.left - area.right) <= 2
+    assert abs(frame.top + frame.bottom - area.top - area.bottom) <= 2
+    assert frame.right - frame.left <= round((area.right - area.left) * .8) + 1
+    assert frame.bottom - frame.top <= round((area.bottom - area.top) * .8) + 1
+    return frame.left, frame.top, frame.right, frame.bottom
+
+
+def exercise_medium_reopen(exe):
+    for mode in (1, 2, 3):
+        launch = subprocess.STARTUPINFO()
+        launch.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        launch.wShowWindow = mode
+        app = subprocess.Popen([exe], startupinfo=launch)
+        try:
+            main, _ = startup_window()
+            wait(lambda: UI.IsWindowVisible(main), "explicit launch")
+            expected = assert_medium(main)
+            close_box = UI.GetDlgItem(main, 7)
+            if not UI.SendMessageW(close_box, 0xF0, 0, 0):
+                UI.SendMessageW(close_box, 0xF5, 0, 0)
+            UI.SendMessageW(main, 0x112, 0xF030, 0)
+            assert UI.IsZoomed(main)
+            UI.SendMessageW(main, 0x10, 0, 0)
+            assert not UI.IsWindowVisible(main)
+            UI.SendMessageW(main, 0x8003, 1, 0x202)
+            assert assert_medium(main) == expected
+            UI.MoveWindow(main, 10, 10, 350, 280, True)
+            subprocess.run([exe], check=True, timeout=10)
+            wait(lambda: geometry(main).left == expected[0], "recenter")
+            assert assert_medium(main) == expected
+            close(app, main)
+            print(f"Medium launch, restore from maximized tray, and shortcut reopen passed: {mode}")
+        finally:
+            if app.poll() is None:
+                app.kill()
+                app.wait()
 
 
 def exercise_layout(main):
@@ -131,6 +175,7 @@ def main():
         assert command == f'"{exe}" --startup'
         exercise_layout(main)
         close(app, main)
+        exercise_medium_reopen(exe)
         for minimize_to_tray in (False, True):
             for shell_mode in (1, 2, 3):  # Normal, minimized, maximized.
                 exercise_tray_launch(exe, command, minimize_to_tray, shell_mode)

@@ -66,19 +66,7 @@ static void registerHiddenTrayIcon(void) {
   else
     KillTimer(mainwin, 5);
 }
-static void restore(void) {
-  waitingForTray = FALSE;
-  KillTimer(mainwin, 5);
-  if (inTray) {
-    trayIcon(NIM_DELETE);
-    inTray = FALSE;
-  }
-  SetWindowPos(mainwin, NULL, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
-  if (IsIconic(mainwin))
-    ShowWindow(mainwin, SW_RESTORE);
-  SetForegroundWindow(mainwin);
-}
+static void restore(void);
 static void minimize(BOOL useTray) {
   if (useTray && (inTray || trayIcon(NIM_ADD))) {
     inTray = TRUE;
@@ -449,6 +437,44 @@ static void fitToDisplay(HWND window, RECT requested) {
   SetWindowPos(window, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
 }
 
+static RECT mediumBounds(HWND window) {
+  RECT area = workArea(window);
+  SIZE preferred = outerSize(552, 396);
+  int width = min(preferred.cx, MulDiv(area.right - area.left, 4, 5));
+  int height = min(preferred.cy, MulDiv(area.bottom - area.top, 4, 5));
+  int x = area.left + (area.right - area.left - width) / 2;
+  int y = area.top + (area.bottom - area.top - height) / 2;
+  RECT bounds = {x, y, x + width, y + height};
+  return bounds;
+}
+
+static void restore(void) {
+  RECT bounds = mediumBounds(mainwin);
+  waitingForTray = FALSE;
+  KillTimer(mainwin, 5);
+  if (inTray) {
+    trayIcon(NIM_DELETE);
+    inTray = FALSE;
+  }
+  if (IsIconic(mainwin) || IsZoomed(mainwin)) {
+    // WINDOWPLACEMENT uses workspace coordinates for normal top-level windows.
+    MONITORINFO monitor = {0};
+    monitor.cbSize = sizeof(monitor);
+    GetMonitorInfoW(MonitorFromWindow(mainwin, MONITOR_DEFAULTTONEAREST), &monitor);
+    WINDOWPLACEMENT placement = {0};
+    placement.length = sizeof(placement);
+    placement.showCmd = SW_SHOWNORMAL;
+    placement.rcNormalPosition = bounds;
+    OffsetRect(&placement.rcNormalPosition, monitor.rcMonitor.left - monitor.rcWork.left,
+               monitor.rcMonitor.top - monitor.rcWork.top);
+    SetWindowPlacement(mainwin, &placement);
+  }
+  // Show directly at the intended bounds, including for a maximized shortcut.
+  SetWindowPos(mainwin, NULL, bounds.left, bounds.top, bounds.right - bounds.left,
+               bounds.bottom - bounds.top, SWP_NOZORDER | SWP_SHOWWINDOW);
+  SetForegroundWindow(mainwin);
+}
+
 static void place(HWND control, int x, int y, int w, int h, int scroll) {
   // Convert edges separately so adjacent controls still align at fractional DPI.
   MoveWindow(control, px(x), px(y) - scroll, px(x+w) - px(x), px(y+h) - px(y), TRUE);
@@ -579,6 +605,10 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       refreshStartup(FALSE);
     break;
   case WM_SYSCOMMAND:
+    if ((w & 0xfff0) == SC_RESTORE && IsIconic(h)) {
+      restore();
+      return 0;
+    }
     if ((w & 0xfff0) == SC_MINIMIZE && trayMode) {
       minimize(trayMode);
       return 0;
@@ -726,6 +756,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
 }
 int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   (void)prev;
+  (void)mode;
 
   BOOL signIn = startupArgument(cmd);
   if (signIn && (!hasStartupEntry() || startupBlocked()))
@@ -784,12 +815,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   updateButton = child(L"BUTTON", L"Check for updates?", 6, BS_PUSHBUTTON);
   controlsReady = TRUE;
   updateFont();
-  RECT area = workArea(mainwin);
-  SIZE initial = outerSize(552, 396);
-  int x = area.left + max(0, (area.right - area.left - initial.cx) / 2);
-  int y = area.top + max(0, (area.bottom - area.top - initial.cy) / 2);
-  RECT initialRect = {x, y, x + initial.cx, y + initial.cy};
-  fitToDisplay(mainwin, initialRect);
+  fitToDisplay(mainwin, mediumBounds(mainwin));
   layout();
   SendMessageW(closeTrayBox, BM_SETCHECK, closeToTray, 0);
   SendMessageW(trayBox, BM_SETCHECK, trayMode, 0);
@@ -804,7 +830,7 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   if (signIn) {
     registerHiddenTrayIcon();
   } else {
-    ShowWindow(mainwin, mode);
+    restore();
     showReleaseNotes(mainwin, lstrcmpW(cmd, L"--updated") == 0);
   }
   MSG msg;
