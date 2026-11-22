@@ -1,6 +1,5 @@
 """Exercise the shipped picker and the real background keyboard listener on Windows."""
 import ctypes
-from pathlib import Path
 import subprocess
 import tempfile
 import time
@@ -8,7 +7,7 @@ from zipfile import ZipFile
 
 from windows_update import ROOT, UI, wait
 
-CTRL, SHIFT, F8, F9 = 0x11, 0x10, 0x77, 0x78
+CTRL, F8, F9 = 0x11, 0x77, 0x78
 
 
 def key(vk, down):
@@ -23,19 +22,23 @@ def tap(vk):
 
 def caption(control):
     text = ctypes.create_unicode_buffer(512)
-    UI.GetWindowTextW(control, text, len(text))
+    UI.SendMessageW(control, 0x000D, len(text), ctypes.addressof(text))  # WM_GETTEXT also reads cross-process edits.
     return text.value
 
 
 def picker(main):
     UI.PostMessageW(main, 0x111, 8, 0)
-    return wait(lambda: UI.FindWindowW("#32770", "Keyboard shortcut"), "keyboard picker")
+    result = wait(lambda: UI.FindWindowW("#32770", "Keyboard shortcut"), "keyboard picker")
+    wait(lambda: UI.IsWindowVisible(result) and UI.GetDlgItem(result, 1000 + F8), "keyboard rendered")
+    return result
 
 
 def click(dialog, item):
     button = UI.GetDlgItem(dialog, item)
     assert button and UI.IsWindowEnabled(button), item
     UI.SendMessageW(button, 0xF5, 0, 0)
+    if item in (1, 2):
+        wait(lambda: not UI.IsWindow(dialog), "picker closed")
 
 
 def run():
@@ -60,7 +63,8 @@ def run():
                     click(dialog, 207)
                     click(dialog, 2)  # Cancel preserves saved combo.
                 else:
-                    assert caption(UI.GetDlgItem(dialog, 202)) == "Ctrl + F8  then  Ctrl + F9"
+                    summary = caption(UI.GetDlgItem(dialog, 202))
+                    assert summary == "Ctrl + F8  then  Ctrl + F9", repr(summary)
                     click(dialog, 2)
                     box = UI.GetDlgItem(main, 7)
                     if not UI.SendMessageW(box, 0xF0, 0, 0):
