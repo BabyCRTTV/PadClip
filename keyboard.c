@@ -348,8 +348,6 @@ static INT_PTR CALLBACK picker(HWND dialog, UINT msg, WPARAM w, LPARAM l) {
     for (int k = VK_BACK; k <= NUM_ENTER; ++k) {
       wchar_t name[64];
       keyName((BYTE)k, name);
-      if (wcsncmp(name, L"VK ", 3) == 0)
-        continue;
       LRESULT item =
           SendDlgItemMessageW(dialog, KEY_OTHER, CB_ADDSTRING, 0, (LPARAM)name);
       if (item >= 0)

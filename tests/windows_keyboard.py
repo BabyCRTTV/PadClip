@@ -78,6 +78,7 @@ def run():
                         tap(F8)
                         tap(0x76)  # Wrong key resets the pending sequence.
                         tap(F9)
+                        assert caption(record) == "Start recording"
                         tap(F8)
                         time.sleep(1.4)
                         tap(F9)
@@ -105,6 +106,19 @@ def run():
                     assert caption(record) == "Stop and save"
                     tap(F8)
                     wait(lambda: caption(record) == "Start recording", "single key stops recording")
+                    dialog = picker(main)
+                    click(dialog, 207)
+                    click(dialog, 1000 + CTRL)
+                    click(dialog, 1000 + F8)
+                    click(dialog, 1)
+                    key(F8, True)
+                    assert caption(record) == "Start recording"
+                    key(CTRL, True)  # Same chord, reverse press order.
+                    key(F8, False)
+                    assert caption(record) == "Stop and save"
+                    tap(F8)
+                    key(CTRL, False)
+                    wait(lambda: caption(record) == "Start recording", "chord stops recording")
                     dialog = picker(main)
                     click(dialog, 207)
                     click(dialog, 1000 + F8)

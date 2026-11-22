@@ -299,7 +299,14 @@ static BOOL closing, stopping, updating;
 
 static wchar_t path[MAX_PATH];
 static const wchar_t *stage;
-static int activePad = -1;
+static int activePad = -1, vibratingPad = -1;
+static void stopVibration(void) {
+  if (vibratingPad >= 0) {
+    XINPUT_VIBRATION off = {0};
+    XInputSetState(vibratingPad, &off);
+    vibratingPad = -1;
+  }
+}
 static void notify(const wchar_t *message) {
   show(details, message);
   show(notice, message);
@@ -310,7 +317,9 @@ static void notify(const wchar_t *message) {
   SetTimer(mainwin, 2, 3600, NULL);
   if (activePad >= 0) {
     XINPUT_VIBRATION v = {16000, 22000};
-    XInputSetState(activePad, &v);
+    stopVibration();
+    if (XInputSetState(activePad, &v) == ERROR_SUCCESS)
+      vibratingPad = activePad;
     SetTimer(mainwin, 3, 160, NULL);
   }
 }
@@ -841,12 +850,11 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
       registerHiddenTrayIcon();
     } else if (w == 3) {
       KillTimer(h, 3);
-      XINPUT_VIBRATION v = {0};
-      if (activePad >= 0)
-        XInputSetState(activePad, &v);
+      stopVibration();
     }
     return 0;
   case WM_DESTROY:
+    stopVibration();
     if (sessionNotifications)
       WTSUnRegisterSessionNotification(h);
     if (inTray)
