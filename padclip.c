@@ -5,8 +5,9 @@
 #include <xinput.h>
 #include <wtsapi32.h>
 #include "updates.h"
+#include "keyboard.h"
 
-static HWND mainwin, binding, status, change, updateButton;
+static HWND mainwin, binding, status, change, updateButton, keyboardButton;
 static const wchar_t *buttons[] = {L"D-pad Up",
                                    L"D-pad Down",
                                    L"D-pad Left",
@@ -285,6 +286,7 @@ static DWORD inputs(XINPUT_GAMEPAD p) {
 static void finish(void) {
   learning = FALSE;
   EnableWindow(updateButton, TRUE);
+  EnableWindow(keyboardButton, TRUE);
   owner = -1;
   candidate = 0;
   show(change, L"Change shortcut");
@@ -345,6 +347,7 @@ static void toggle(void) {
   show(details, L"Starting recorder...");
   show(recordButton, L"Stop and save");
   EnableWindow(change, FALSE);
+  EnableWindow(keyboardButton, FALSE);
 }
 static void poll(void) {
   DWORD m[4] = {0};
@@ -417,7 +420,7 @@ static void poll(void) {
       fire = TRUE;
     }
   }
-  if (fire)
+  if (fire && IsWindowEnabled(mainwin))
     toggle();
   show(status,
        any ? L"Controller connected. Minimize PadClip and open your game."
@@ -551,11 +554,12 @@ static void layout(void) {
   int checkH = content < 330 ? 40 : 30;
   int settingsY = detailsY + 58;
   int checksY = settingsY + 26;
+  BOOL stackSettings = content < 288;
   int updateY = checksY + checkH * 3 + 6;
   SCROLLINFO si = {0};
   si.cbSize = sizeof(si);
   si.fMask = SIF_RANGE | SIF_PAGE;
-  si.nMax = px(updateY + 36 + margin) - 1;
+  si.nMax = px(updateY + (stackSettings ? 80 : 36) + margin) - 1;
   si.nPage = client.bottom;
   SetScrollInfo(mainwin, SB_VERT, &si, TRUE);
   RECT actual;
@@ -579,7 +583,10 @@ static void layout(void) {
   place(trayBox, margin, checksY, content, checkH, scroll);
   place(closeTrayBox, margin, checksY + checkH, content, checkH, scroll);
   place(startupBox, margin, checksY + checkH * 2, content, checkH, scroll);
-  place(updateButton, margin, updateY, min(content, 190), 36, scroll);
+  int buttonW = stackSettings ? min(content, 190) : min((content - gap) / 2, 190);
+  place(updateButton, margin, updateY, buttonW, 36, scroll);
+  place(keyboardButton, stackSettings ? margin : margin + buttonW + gap,
+        updateY + (stackSettings ? 44 : 0), buttonW, 36, scroll);
 }
 
 static void scrollTo(int pos) {
@@ -626,10 +633,22 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     if (keepWindowHidden)
       ((WINDOWPOS *)l)->flags &= ~SWP_SHOWWINDOW;
     break;
+  case WM_INPUT_DEVICE_CHANGE:
+    keyboardReset();
+    break;
+  case WM_INPUT:
+    if (keyboardInput((HRAWINPUT)l, !learning && !closing && !updating && IsWindowEnabled(h))) {
+      activePad = -1;
+      toggle();
+    }
+    break; // DefWindowProc performs foreground raw input cleanup.
   case WM_WTSSESSION_CHANGE:
+    keyboardReset();
     if ((w == WTS_SESSION_LOCK || w == WTS_SESSION_UNLOCK ||
-         w == WTS_CONSOLE_CONNECT || w == WTS_REMOTE_CONNECT) && traySignInEnabled())
+         w == WTS_CONSOLE_CONNECT || w == WTS_REMOTE_CONNECT) && traySignInEnabled()) {
+      keyboardDismiss();
       stayInTray();
+    }
     return 0;
   case WM_SIZE:
     layout();
@@ -702,11 +721,17 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   case WM_COMMAND:
     switch (LOWORD(w)) {
+    case 8:
+      if (!worker && !learning && !updating && !closing && IsWindowEnabled(mainwin))
+        keyboardEdit(h, config);
+      break;
     case 1:
       if (learning)
         finish();
       else {
         learning = TRUE;
+        keyboardReset();
+        EnableWindow(keyboardButton, FALSE);
         EnableWindow(updateButton, FALSE);
         armed = FALSE;
         candidate = 0;
@@ -739,6 +764,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
         EnableWindow(updateButton, FALSE);
         EnableWindow(recordButton, FALSE);
         EnableWindow(change, FALSE);
+        EnableWindow(keyboardButton, FALSE);
         show(updateButton, L"Checking for updates...");
         SetTimer(h, 4, 150, NULL);
       }
@@ -762,6 +788,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
     stopEvent = NULL;
     stopping = FALSE;
     EnableWindow(change, TRUE);
+    EnableWindow(keyboardButton, TRUE);
     show(recordButton, L"Start recording");
     if (FAILED(hr)) {
       wchar_t error[260];
@@ -801,6 +828,7 @@ static LRESULT CALLBACK handler(HWND h, UINT msg, WPARAM w, LPARAM l) {
         EnableWindow(updateButton, TRUE);
         EnableWindow(recordButton, TRUE);
         EnableWindow(change, TRUE);
+        EnableWindow(keyboardButton, TRUE);
         if (code)
           MessageBoxW(h, L"The update checker could not run. Please try again.",
                       L"PadClip updates", MB_ICONWARNING);
@@ -895,6 +923,8 @@ int WINAPI wWinMain(HINSTANCE app, HINSTANCE prev, PWSTR cmd, int mode) {
   closeTrayBox = child(L"BUTTON", L"Close to system tray", 7, checkStyle);
   startupBox = child(L"BUTTON", L"", 5, checkStyle);
   updateButton = child(L"BUTTON", L"Check for updates?", 6, BS_PUSHBUTTON);
+  keyboardButton = child(L"BUTTON", L"Keyboard shortcut", 8, BS_PUSHBUTTON);
+  keyboardLoad(mainwin, config);
   controlsReady = TRUE;
   updateFont();
   fitToDisplay(mainwin, mediumBounds(mainwin));

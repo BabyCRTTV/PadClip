@@ -8,6 +8,15 @@ Your saved controller shortcut is retained. The default is LB + RB pressed toget
 Press and release the shortcut to start. Repeat to stop and save.
 Change shortcut learns a new combination. Games also receive these inputs.
 
+For keyboard and mouse play, open **Settings → Keyboard shortcut**. Click keys
+on the on-screen keyboard to build one step, such as F8 or Ctrl + Shift + R.
+Choose **Next step** for an ordered sequence, such as G then G or Ctrl + K
+then Ctrl + R. Finish each next step within 1.2 seconds. You can keep a shared
+modifier held between steps. Save to activate the shortcut, or choose **Clear
+all** and **Save** to turn it off. The keyboard shortcut works from the tray,
+alongside your controller shortcut. Games also receive the keystrokes.
+Choose keys that Windows and your keyboard send to applications.
+
 A brief on-screen banner appears after the encoder accepts the first frame.
 The controller also pulses if it supports vibration. The status line
 remains available in PadClip. Use Start recording and Stop and save in the

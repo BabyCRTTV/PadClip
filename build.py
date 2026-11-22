@@ -23,7 +23,7 @@ def build():
     with tempfile.TemporaryDirectory() as temp:
         out = Path(temp)
         objects = []
-        for name in ("padclip.c", "updates.c", "capture.cpp"):
+        for name in ("padclip.c", "keyboard.c", "updates.c", "capture.cpp"):
             obj = out / (name + ".o")
             compiler = cxx if name.endswith(".cpp") else cc
             subprocess.run([compiler, *flags, "-c", name, "-o", obj], cwd=ROOT, check=True)
@@ -42,7 +42,7 @@ def build():
             package.write(exe, "PadClip.exe")
             readme = ROOT / "README.md"
             package.write(readme if readme.exists() else ROOT / "Readme.txt", "Readme.txt")
-            for name in ("padclip.c", "capture.cpp", "desktop.h", "updates.c", "updates.h",
+            for name in ("padclip.c", "keyboard.c", "keyboard.h", "capture.cpp", "desktop.h", "updates.c", "updates.h",
                          "padclip.rc", "PadClip.manifest", "PadClip.ico", "updater.ps1", "release.txt", "build.py"):
                 package.write(ROOT / name, name)
     feed = {"version": version, "sha256": hashlib.sha256(PACKAGE.read_bytes()).hexdigest()}
