@@ -433,7 +433,8 @@ static void poll(void) {
     toggle();
   show(status,
        any ? L"Controller connected. Minimize PadClip and open your game."
-           : L"Waiting for an Xbox-compatible controller.");
+           : keyboardReady() ? L"Keyboard shortcut ready. No controller connected."
+                             : L"Waiting for an Xbox-compatible controller.");
 }
 static HWND minimizeButton, settingsLabel;
 static HFONT uiFont;

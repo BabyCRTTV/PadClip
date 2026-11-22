@@ -5,6 +5,7 @@
 static KeyBinding saved, draft;
 static KeyState state;
 static HWND editor;
+static BOOL listening;
 static int stepIndex;
 static const wchar_t *configPath;
 
@@ -102,8 +103,13 @@ static BOOL registerKeyboard(HWND owner, BOOL on) {
   RAWINPUTDEVICE device = {
       1, 6, on ? RIDEV_INPUTSINK | RIDEV_DEVNOTIFY : RIDEV_REMOVE,
       on ? owner : NULL};
-  return RegisterRawInputDevices(&device, 1, sizeof(device));
+  if (!RegisterRawInputDevices(&device, 1, sizeof(device)))
+    return FALSE;
+  listening = on;
+  return TRUE;
 }
+
+BOOL keyboardReady(void) { return listening && saved.count; }
 
 void keyboardReset(void) { ZeroMemory(&state, sizeof(state)); }
 void keyboardDismiss(void) {

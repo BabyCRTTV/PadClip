@@ -32,6 +32,7 @@ BOOL keyTransition(KeyState *state, const KeyBinding *binding, BYTE key,
                    BOOL down, ULONGLONG now);
 void keyboardLoad(HWND owner, const wchar_t *config);
 void keyboardEdit(HWND owner, const wchar_t *config);
+BOOL keyboardReady(void);
 void keyboardReset(void);
 void keyboardDismiss(void);
 BOOL keyboardInput(HRAWINPUT input, BOOL enabled);
